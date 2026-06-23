@@ -19,6 +19,8 @@ pub struct OverlayConfig {
     pub offset_x: i32,
     pub offset_y: i32,
     pub screen_margin: i32,
+    #[serde(default = "default_overlay_max_height")]
+    pub max_height: u32,
     pub opacity: f32,
     pub font_size: u32,
     pub no_drag_ms: u64,
@@ -54,6 +56,7 @@ impl Default for OverlayConfig {
             offset_x: 0,
             offset_y: 0,
             screen_margin: 12,
+            max_height: default_overlay_max_height(),
             opacity: 0.55,
             font_size: 18,
             no_drag_ms: 500,
@@ -68,6 +71,10 @@ impl Default for OverlayConfig {
 
 fn default_overlay_draggable() -> bool {
     true
+}
+
+fn default_overlay_max_height() -> u32 {
+    620
 }
 
 fn default_source_background() -> String {
@@ -110,6 +117,7 @@ impl AppConfig {
             .with_context(|| format!("读取配置失败：{}", path.display()))?;
         let missing_overlay_fields = !text.contains("\"show_source\"")
             || !text.contains("\"draggable\"")
+            || !text.contains("\"max_height\"")
             || !text.contains("\"source_background\"")
             || !text.contains("\"translation_background\"");
         let mut cfg: Self = serde_json::from_str(&text)
@@ -137,6 +145,7 @@ impl AppConfig {
             self.hotkey = "MouseX1".to_string();
         }
         self.overlay.width = self.overlay.width.clamp(180, 900);
+        self.overlay.max_height = self.overlay.max_height.clamp(120, 1200);
         self.overlay.font_size = self.overlay.font_size.clamp(12, 48);
         self.overlay.opacity = self.overlay.opacity.clamp(0.05, 0.9);
         self.overlay.screen_margin = self.overlay.screen_margin.clamp(0, 120);

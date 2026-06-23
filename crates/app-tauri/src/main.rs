@@ -4,11 +4,12 @@ use app_core::{
     provider_catalog, translate, AppConfig, ProviderInfo, TranslationRequest, TranslationResponse,
 };
 use app_windows::{
-    available_windows_ocr_languages, capture_rect_png, cursor_position, detect_ocr_engines,
-    install_snippingtool_oneocr_runtime, preview_snippingtool_oneocr_package,
-    recognize_png_pipeline, release_cursor_lock, select_rect_native, start_native_window_resize,
-    virtual_screen_rect, GlobalInputEvent, KeyboardEvent, MouseButton, NativeResizeDirection,
-    OcrEngineStatus, OcrLanguageInfo, OcrPipelineRequest, OneOcrPackageInfo, Point, Rect,
+    available_windows_ocr_languages, capture_rect_png, close_native_selection_windows,
+    cursor_position, detect_ocr_engines, install_snippingtool_oneocr_runtime,
+    preview_snippingtool_oneocr_package, recognize_png_pipeline, release_cursor_lock,
+    select_rect_native, start_native_window_resize, virtual_screen_rect, GlobalInputEvent,
+    KeyboardEvent, MouseButton, NativeResizeDirection, OcrEngineStatus, OcrLanguageInfo,
+    OcrPipelineRequest, OneOcrPackageInfo, Point, Rect,
 };
 use image::{ImageFormat, RgbaImage};
 use serde::{Deserialize, Serialize};
@@ -34,13 +35,6 @@ struct AppState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ManualTranslateRequest {
-    text: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct OcrDiagnosticResponse {
-    engine: String,
-    image_path: String,
     text: String,
 }
 
@@ -87,14 +81,19 @@ fn get_config(state: State<'_, AppState>) -> Result<AppConfig, String> {
 }
 
 #[tauri::command]
-fn save_config(mut config: AppConfig, state: State<'_, AppState>) -> Result<(), String> {
+fn save_config(
+    mut config: AppConfig,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     config.normalize();
     config.save().map_err(|e| e.to_string())?;
     let mut guard = state
         .config
         .lock()
         .map_err(|e| format!("写入配置锁失败：{e}"))?;
-    *guard = config;
+    *guard = config.clone();
+    refresh_overlay_settings(&app, &config);
     Ok(())
 }
 
@@ -155,58 +154,6 @@ async fn manual_translate(
 }
 
 #[tauri::command]
-async fn diagnose_last_capture(
-    state: State<'_, AppState>,
-) -> Result<OcrDiagnosticResponse, String> {
-    let cfg = state
-        .config
-        .lock()
-        .map_err(|e| format!("读取配置锁失败：{e}"))?
-        .clone();
-    let dir = app_core::config_dir().map_err(|e| e.to_string())?;
-    let path = dir.join("last_capture.png");
-    if !path.exists() {
-        return Err(format!(
-            "还没有上一张 OCR 截图。请先在游戏里框选一次，或点击“进行一次 OCR”。\n预期路径：{}",
-            path.display()
-        ));
-    }
-    let png = std::fs::read(&path).map_err(|e| format!("读取上一张 OCR 截图失败：{e}"))?;
-    let result = recognize_png_pipeline(
-        &png,
-        OcrPipelineRequest {
-            engine: cfg.ocr_engine.clone(),
-            source_lang: cfg.source_lang.clone(),
-            save_preprocessed: true,
-        },
-    )
-    .await
-    .map_err(|e| format!("OCR 诊断失败：{e}"))?;
-    Ok(OcrDiagnosticResponse {
-        engine: result.engine,
-        image_path: path.display().to_string(),
-        text: result.text,
-    })
-}
-
-#[tauri::command]
-fn open_last_capture() -> Result<(), String> {
-    let dir = app_core::config_dir().map_err(|e| e.to_string())?;
-    let path = dir.join("last_capture.png");
-    if !path.exists() {
-        return Err(format!(
-            "还没有上一张 OCR 截图。请先框选一次。\n预期路径：{}",
-            path.display()
-        ));
-    }
-    std::process::Command::new("explorer.exe")
-        .arg(format!("/select,{}", path.display()))
-        .spawn()
-        .map_err(|e| format!("打开截图失败：{e}"))?;
-    Ok(())
-}
-
-#[tauri::command]
 async fn run_ocr_once(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let cfg = state
         .config
@@ -215,35 +162,6 @@ async fn run_ocr_once(app: tauri::AppHandle, state: State<'_, AppState>) -> Resu
         .clone();
     start_selection_window(&app, &cfg).map_err(|e| e.to_string())?;
     Ok(())
-}
-
-#[tauri::command]
-fn show_test_overlay(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    let cfg = state
-        .config
-        .lock()
-        .map_err(|e| format!("读取配置锁失败：{e}"))?
-        .clone();
-    let anchor = app
-        .primary_monitor()
-        .map_err(|e| e.to_string())?
-        .map(|monitor| {
-            let pos = monitor.position();
-            let size = monitor.size();
-            Point {
-                x: pos.x + (size.width as i32 / 2),
-                y: pos.y + (size.height as i32 / 2),
-            }
-        })
-        .unwrap_or(Point { x: 240, y: 160 });
-    show_overlay(
-        &app,
-        &cfg,
-        anchor,
-        "Overlay self test".to_string(),
-        "浮窗测试：如果你能看到这个透明浮窗，说明浮窗窗口本身正常。".to_string(),
-    )
-    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -311,16 +229,6 @@ fn close_overlay(app: tauri::AppHandle) -> Result<(), String> {
 fn start_overlay_drag(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("overlay") {
         window.start_dragging().map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-fn start_overlay_resize_width(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("overlay") {
-        let hwnd = window.hwnd().map_err(|e| e.to_string())?;
-        start_native_window_resize(hwnd.0 as isize, NativeResizeDirection::East)
-            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -402,6 +310,7 @@ fn get_cursor_position() -> Result<Point, String> {
 
 fn start_selection_window(app: &tauri::AppHandle, _cfg: &AppConfig) -> anyhow::Result<()> {
     let _ = release_cursor_lock();
+    cleanup_selection_layers(app);
     if let Some(window) = app.get_webview_window("overlay") {
         let _ = window.hide();
     }
@@ -455,6 +364,7 @@ fn start_mouse_selection(app: tauri::AppHandle) {
                 return;
             }
         };
+        cleanup_selection_layers(&app);
         finish_selection_state(&app);
         let anchor = Point {
             x: rect.x + rect.width,
@@ -506,6 +416,8 @@ fn start_mouse_selection(app: tauri::AppHandle) {
 }
 
 fn finish_selection_state(app: &tauri::AppHandle) {
+    cleanup_selection_layers(app);
+    close_native_selection_windows();
     if let Some(state) = app.try_state::<AppState>() {
         state.selection_active.store(false, Ordering::SeqCst);
         state.selection_cancel.store(false, Ordering::SeqCst);
@@ -513,9 +425,20 @@ fn finish_selection_state(app: &tauri::AppHandle) {
 }
 
 fn finish_selection_cancel(app: &tauri::AppHandle, restore_main_window: bool) {
+    cleanup_selection_layers(app);
     finish_selection_state(app);
     restore_main_window_after_selection(app, restore_main_window);
     let _ = app.emit("ocr-status", "已取消");
+}
+
+fn cleanup_selection_layers(app: &tauri::AppHandle) {
+    close_native_selection_windows();
+    for label in ["selection", "selection-box", "selection-dim"] {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.hide();
+            let _ = window.close();
+        }
+    }
 }
 
 fn hide_main_window_for_selection(app: &tauri::AppHandle) -> bool {
@@ -865,6 +788,7 @@ async fn run_pipeline(
     payload: SelectionPayload,
     frozen_screen: Option<FrozenScreen>,
 ) -> anyhow::Result<()> {
+    cleanup_selection_layers(&app);
     app.emit("ocr-status", "正在截图...")?;
     let selected_rect = payload.rect.normalized();
     let capture_rect = selected_rect;
@@ -954,6 +878,7 @@ fn show_user_message(
     anchor: Point,
     message: &str,
 ) -> anyhow::Result<()> {
+    cleanup_selection_layers(app);
     let _ = app.emit("ocr-status", message);
     show_overlay(app, cfg, anchor, String::new(), message.to_string())
 }
@@ -1068,6 +993,7 @@ fn show_overlay(
     raw_text: String,
     text: String,
 ) -> anyhow::Result<()> {
+    cleanup_selection_layers(app);
     let display_raw_text = ocr_display_text(&raw_text);
     let display_text = if cfg.overlay.show_source && !display_raw_text.trim().is_empty() {
         format!("{display_raw_text}\n\n{text}")
@@ -1077,7 +1003,7 @@ fn show_overlay(
     let metrics = estimate_overlay_size(&display_text, cfg.overlay.width, cfg.overlay.font_size);
     let width = metrics.0;
     let height = metrics.1;
-    let mut max_height = 620;
+    let mut max_height = cfg.overlay.max_height;
 
     let mut x = anchor.x + cfg.overlay.offset_x;
     let mut y = anchor.y + cfg.overlay.offset_y;
@@ -1142,6 +1068,34 @@ fn show_overlay(
     window.show()?;
     window.emit("overlay-show", payload)?;
     Ok(())
+}
+
+fn refresh_overlay_settings(app: &tauri::AppHandle, cfg: &AppConfig) {
+    let Some(window) = app.get_webview_window("overlay") else {
+        return;
+    };
+    let Ok(true) = window.is_visible() else {
+        return;
+    };
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let Ok(mut guard) = state.last_overlay.lock() else {
+        return;
+    };
+    let Some(payload) = guard.as_mut() else {
+        return;
+    };
+    payload.opacity = cfg.overlay.opacity;
+    payload.font_size = cfg.overlay.font_size;
+    payload.max_height = cfg.overlay.max_height;
+    payload.source_background = cfg.overlay.source_background.clone();
+    payload.translation_background = cfg.overlay.translation_background.clone();
+    payload.double_click_close = cfg.overlay.double_click_close;
+    payload.show_source = cfg.overlay.show_source;
+    payload.draggable = cfg.overlay.draggable;
+    payload.width = cfg.overlay.width;
+    let _ = window.emit("overlay-show", payload.clone());
 }
 
 fn estimate_overlay_size(text: &str, default_width: u32, font_size: u32) -> (u32, u32) {
@@ -1320,16 +1274,12 @@ fn main() {
             preview_oneocr_runtime,
             install_oneocr_runtime,
             manual_translate,
-            diagnose_last_capture,
-            open_last_capture,
             run_ocr_once,
-            show_test_overlay,
             selection_done,
             selection_auto_detect,
             selection_cancel,
             close_overlay,
             start_overlay_drag,
-            start_overlay_resize_width,
             start_overlay_resize_corner,
             resize_overlay_to_content,
             get_overlay_payload,

@@ -18,12 +18,12 @@ use windows::{
         UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus},
         UI::WindowsAndMessaging::{
             BringWindowToTop, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-            GetClientRect, GetMessageW, LoadCursorW, PostQuitMessage, RegisterClassW,
-            SetForegroundWindow, SetWindowPos, ShowWindow, TranslateMessage, CS_HREDRAW,
-            CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, IDC_CROSS, MSG, SWP_NOMOVE, SWP_NOSIZE,
-            SW_SHOW, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-            WM_NCCREATE, WM_PAINT, WM_RBUTTONUP, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-            WS_POPUP,
+            FindWindowExW, GetClientRect, GetMessageW, LoadCursorW, PostMessageW, PostQuitMessage,
+            RegisterClassW, SetForegroundWindow, SetWindowPos, ShowWindow, TranslateMessage,
+            CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, IDC_CROSS, MSG, SWP_NOMOVE,
+            SWP_NOSIZE, SW_SHOW, WM_CLOSE, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+            WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP, WNDCLASSW, WS_EX_TOOLWINDOW,
+            WS_EX_TOPMOST, WS_POPUP,
         },
     },
 };
@@ -87,6 +87,22 @@ pub fn select_rect_native(screen_rect: Rect, frozen_png: &[u8]) -> Result<Option
     }
 
     Ok(rx.try_recv().unwrap_or(None))
+}
+
+pub fn close_native_selection_windows() {
+    unsafe {
+        let mut hwnd = HWND::default();
+        loop {
+            let Ok(found) = FindWindowExW(None, hwnd, CLASS_NAME, None) else {
+                break;
+            };
+            hwnd = found;
+            if hwnd.0.is_null() {
+                break;
+            }
+            let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+    }
 }
 
 unsafe fn register_selection_class(instance: HINSTANCE) -> Result<()> {

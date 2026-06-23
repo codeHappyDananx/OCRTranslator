@@ -3,13 +3,12 @@ use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
     UI::{
         Input::KeyboardAndMouse::ReleaseCapture,
-        WindowsAndMessaging::{SendMessageW, HTBOTTOMRIGHT, HTRIGHT, WM_NCLBUTTONDOWN},
+        WindowsAndMessaging::{SendMessageW, HTBOTTOMRIGHT, WM_NCLBUTTONDOWN},
     },
 };
 
 #[derive(Debug, Clone, Copy)]
 pub enum NativeResizeDirection {
-    East,
     SouthEast,
 }
 
@@ -18,7 +17,6 @@ pub fn start_native_window_resize(hwnd_raw: isize, direction: NativeResizeDirect
         bail!("窗口句柄无效");
     }
     let hit_test = match direction {
-        NativeResizeDirection::East => HTRIGHT,
         NativeResizeDirection::SouthEast => HTBOTTOMRIGHT,
     };
     unsafe {

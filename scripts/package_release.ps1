@@ -24,6 +24,17 @@ Push-Location $ProjectRoot
 try {
   Stop-Process -Name OCR-Translator,ocr-translator -Force -ErrorAction SilentlyContinue
 
+  Push-Location $AppDir
+  try {
+    if (-not (Test-Path (Join-Path $AppDir "node_modules"))) {
+      & npm.cmd install
+    }
+    & npm.cmd run build
+  }
+  finally {
+    Pop-Location
+  }
+
   if (-not (Test-OneOcrRuntime $ResourceDir)) {
     Write-Host "Preparing bundled OneOCR runtime..."
     $localCache = Join-Path $env:LOCALAPPDATA "OCR-Translator\SnippingTool"

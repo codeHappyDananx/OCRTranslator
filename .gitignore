@@ -1,6 +1,8 @@
 /target/
 /installer/
 /crates/app-tauri/resources/SnippingTool/
+/crates/app-tauri/node_modules/
+/crates/app-tauri/frontend/dist/
 /.vs/
 /.vscode/
 *.pdb
