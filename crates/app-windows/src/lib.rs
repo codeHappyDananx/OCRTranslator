@@ -5,7 +5,7 @@ pub mod ocr;
 pub mod pipeline;
 pub mod screen;
 
-pub use cursor::{cursor_position, release_cursor_lock};
+pub use cursor::{cursor_position, left_mouse_down, release_cursor_lock, right_mouse_down};
 pub use geometry::{Point, Rect};
 pub use hotkey::{GlobalInputEvent, GlobalInputHook, KeyboardEvent, MouseButton, MouseEvent};
 pub use ocr::{
@@ -15,4 +15,4 @@ pub use ocr::{
     OneOcrPackageInfo,
 };
 pub use pipeline::{recognize_png_pipeline, OcrPipelineRequest, OcrPipelineResult};
-pub use screen::capture_rect_png;
+pub use screen::{capture_rect_png, virtual_screen_rect};

@@ -5,13 +5,15 @@ use app_core::{
 };
 use app_windows::{
     available_windows_ocr_languages, capture_rect_png, cursor_position, detect_ocr_engines,
-    install_snippingtool_oneocr_runtime, preview_snippingtool_oneocr_package,
-    recognize_png_pipeline, release_cursor_lock, GlobalInputEvent, KeyboardEvent, MouseButton,
-    OcrEngineStatus, OcrLanguageInfo, OcrPipelineRequest, OneOcrPackageInfo, Point, Rect,
+    install_snippingtool_oneocr_runtime, left_mouse_down, preview_snippingtool_oneocr_package,
+    recognize_png_pipeline, release_cursor_lock, right_mouse_down, virtual_screen_rect,
+    GlobalInputEvent, KeyboardEvent, MouseButton, OcrEngineStatus, OcrLanguageInfo,
+    OcrPipelineRequest, OneOcrPackageInfo, Point, Rect,
 };
-use image::RgbaImage;
+use image::{ImageFormat, RgbaImage};
 use serde::{Deserialize, Serialize};
 use std::{
+    io::Cursor,
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -41,6 +43,12 @@ struct OcrDiagnosticResponse {
 struct SelectionPayload {
     rect: Rect,
     anchor: Point,
+}
+
+#[derive(Clone)]
+struct FrozenScreen {
+    rect: Rect,
+    png: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -259,7 +267,7 @@ async fn selection_done(
         .lock()
         .map_err(|e| format!("读取配置锁失败：{e}"))?
         .clone();
-    run_pipeline(app, cfg, payload)
+    run_pipeline(app, cfg, payload, None)
         .await
         .map_err(|e| e.to_string())
 }
@@ -283,7 +291,7 @@ async fn selection_auto_detect(
         let _ = app.emit("ocr-status", "未识别到可自动扩选的区域");
         return Ok(());
     };
-    run_pipeline(app, cfg, SelectionPayload { rect, anchor })
+    run_pipeline(app, cfg, SelectionPayload { rect, anchor }, None)
         .await
         .map_err(|e| e.to_string())
 }
@@ -446,39 +454,189 @@ fn start_selection_window(app: &tauri::AppHandle, _cfg: &AppConfig) -> anyhow::R
         let _ = window.hide();
     }
     clear_overlay_payload(app);
-    if let Some(window) = app.get_webview_window("selection") {
-        window.show()?;
-        let _ = window.emit("selection-reset", ());
-        window.set_focus()?;
-        return Ok(());
-    }
-    let window = create_selection_window(app)?;
-    window.show()?;
-    let _ = window.emit("selection-reset", ());
-    window.set_focus()?;
+    app.emit("ocr-status", "拖动选择要翻译的文字，右键取消")?;
+    start_mouse_selection(app.clone());
     Ok(())
 }
 
-fn create_selection_window(app: &tauri::AppHandle) -> anyhow::Result<tauri::WebviewWindow> {
-    let (x, y, width, height) = if let Some(monitor) = app.primary_monitor()? {
-        let pos = monitor.position();
-        let size = monitor.size();
-        (pos.x, pos.y, size.width, size.height)
+fn start_mouse_selection(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let _ = hide_selection_box(&app);
+        let frozen_screen = match capture_frozen_screen() {
+            Ok(screen) => Some(screen),
+            Err(err) => {
+                eprintln!("freeze screen failed: {err}");
+                None
+            }
+        };
+        while left_mouse_down() {
+            if right_mouse_down() {
+                let _ = app.emit("ocr-status", "已取消");
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(16)).await;
+        }
+        loop {
+            if right_mouse_down() {
+                let _ = app.emit("ocr-status", "已取消");
+                let _ = hide_selection_box(&app);
+                return;
+            }
+            if left_mouse_down() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(16)).await;
+        }
+        let start = match cursor_position() {
+            Ok(point) => point,
+            Err(err) => {
+                let _ = app.emit("ocr-status", format!("无法读取鼠标位置：{err}"));
+                return;
+            }
+        };
+        let mut last_rect = Rect {
+            x: start.x,
+            y: start.y,
+            width: 1,
+            height: 1,
+        };
+        while left_mouse_down() {
+            if right_mouse_down() {
+                let _ = hide_selection_box(&app);
+                let _ = app.emit("ocr-status", "已取消");
+                return;
+            }
+            if let Ok(current) = cursor_position() {
+                let rect = rect_from_points(start, current);
+                if rect != last_rect && rect.width >= 1 && rect.height >= 1 {
+                    let _ = show_selection_box(&app, rect);
+                    last_rect = rect;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(16)).await;
+        }
+        let end = cursor_position().unwrap_or(Point {
+            x: start.x + last_rect.width,
+            y: start.y + last_rect.height,
+        });
+        let _ = hide_selection_box(&app);
+        let rect = rect_from_points(start, end);
+        let cfg = match app.state::<AppState>().config.lock().map(|cfg| cfg.clone()) {
+            Ok(cfg) => cfg,
+            Err(_) => return,
+        };
+        if rect.width < 16 || rect.height < 16 {
+            match auto_detect_selection_rect(&app, end) {
+                Ok(Some(rect)) => {
+                    let _ = run_pipeline(
+                        app,
+                        cfg,
+                        SelectionPayload { rect, anchor: end },
+                        frozen_screen,
+                    )
+                    .await;
+                }
+                Ok(None) => {
+                    let _ =
+                        show_user_message(&app, &cfg, end, "没看到可识别的文字，换个区域再试试。");
+                }
+                Err(_) => {
+                    let _ = show_user_message(&app, &cfg, end, "这次没有选到文字，请重新试一次。");
+                }
+            }
+            return;
+        }
+        let _ = run_pipeline(
+            app,
+            cfg,
+            SelectionPayload { rect, anchor: end },
+            frozen_screen,
+        )
+        .await;
+    });
+}
+
+fn capture_frozen_screen() -> anyhow::Result<FrozenScreen> {
+    let rect = virtual_screen_rect();
+    let png = capture_rect_png(rect)?;
+    Ok(FrozenScreen { rect, png })
+}
+
+fn crop_frozen_screen_png(screen: &FrozenScreen, rect: Rect) -> anyhow::Result<Vec<u8>> {
+    let rect = rect.normalized();
+    let left = rect.x.max(screen.rect.x);
+    let top = rect.y.max(screen.rect.y);
+    let right = (rect.x + rect.width).min(screen.rect.x + screen.rect.width);
+    let bottom = (rect.y + rect.height).min(screen.rect.y + screen.rect.height);
+    let width = (right - left).max(0);
+    let height = (bottom - top).max(0);
+    if width <= 2 || height <= 2 {
+        anyhow::bail!("选区太小，无法截图");
+    }
+
+    let image = image::load_from_memory(&screen.png)?.to_rgba8();
+    let cropped = image::imageops::crop_imm(
+        &image,
+        (left - screen.rect.x) as u32,
+        (top - screen.rect.y) as u32,
+        width as u32,
+        height as u32,
+    )
+    .to_image();
+    let mut out = Cursor::new(Vec::new());
+    cropped.write_to(&mut out, ImageFormat::Png)?;
+    Ok(out.into_inner())
+}
+
+fn rect_from_points(start: Point, end: Point) -> Rect {
+    Rect {
+        x: start.x.min(end.x),
+        y: start.y.min(end.y),
+        width: (start.x - end.x).abs(),
+        height: (start.y - end.y).abs(),
+    }
+}
+
+fn get_or_create_selection_box(app: &tauri::AppHandle) -> anyhow::Result<tauri::WebviewWindow> {
+    let window = if let Some(window) = app.get_webview_window("selection-box") {
+        window
     } else {
-        (0, 0, 1920, 1080)
+        WebviewWindowBuilder::new(
+            app,
+            "selection-box",
+            WebviewUrl::App("selection-box.html".into()),
+        )
+        .title("OCR 选区")
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .focusable(false)
+        .resizable(false)
+        .skip_taskbar(true)
+        .visible(false)
+        .inner_size(1.0, 1.0)
+        .build()?
     };
-    let window =
-        WebviewWindowBuilder::new(app, "selection", WebviewUrl::App("selection.html".into()))
-            .title("选择 OCR 区域")
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .visible(false)
-            .position(x as f64, y as f64)
-            .inner_size(width as f64, height as f64)
-            .build()?;
     Ok(window)
+}
+
+fn show_selection_box(app: &tauri::AppHandle, rect: Rect) -> anyhow::Result<()> {
+    let rect = rect.normalized();
+    let window = get_or_create_selection_box(app)?;
+    window.set_position(PhysicalPosition::new(rect.x, rect.y))?;
+    window.set_size(PhysicalSize::new(
+        rect.width.max(1) as u32,
+        rect.height.max(1) as u32,
+    ))?;
+    window.show()?;
+    Ok(())
+}
+
+fn hide_selection_box(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("selection-box") {
+        window.hide().map_err(|err| err.to_string())?;
+    }
+    Ok(())
 }
 
 fn auto_detect_selection_rect(
@@ -774,20 +932,24 @@ async fn run_pipeline(
     app: tauri::AppHandle,
     cfg: AppConfig,
     payload: SelectionPayload,
+    frozen_screen: Option<FrozenScreen>,
 ) -> anyhow::Result<()> {
     app.emit("ocr-status", "正在截图...")?;
     let selected_rect = payload.rect.normalized();
     let capture_rect = selected_rect;
-    let png = match capture_rect_png(capture_rect) {
+    let png = match frozen_screen
+        .as_ref()
+        .map(|screen| crop_frozen_screen_png(screen, capture_rect))
+        .unwrap_or_else(|| capture_rect_png(capture_rect))
+    {
         Ok(png) => png,
         Err(err) => {
-            let message = format!("截图失败：{err}");
-            let _ = app.emit("ocr-status", &message);
-            show_overlay(&app, &cfg, payload.anchor, String::new(), message)?;
+            eprintln!("capture failed: {err}");
+            show_user_message(&app, &cfg, payload.anchor, "截图没有成功，请重新试一次。")?;
             return Ok(());
         }
     };
-    app.emit("ocr-status", "正在 OCR 识别...")?;
+    app.emit("ocr-status", "正在识别文字...")?;
     let ocr_result = match recognize_png_pipeline(
         &png,
         OcrPipelineRequest {
@@ -800,9 +962,13 @@ async fn run_pipeline(
     {
         Ok(result) => result,
         Err(err) => {
-            let message = format!("OCR 失败：{err}");
-            let _ = app.emit("ocr-status", "OCR 失败");
-            show_overlay(&app, &cfg, payload.anchor, String::new(), message)?;
+            eprintln!("ocr failed: {err}");
+            show_user_message(
+                &app,
+                &cfg,
+                payload.anchor,
+                "没看到可识别的文字，换个区域再试试。",
+            )?;
             return Ok(());
         }
     };
@@ -827,13 +993,15 @@ async fn run_pipeline(
     }
     let raw_text = ocr_result.text.trim().to_string();
     if raw_text.is_empty() {
-        let message =
-            "未识别到文本。请框选更清晰的英文区域，或者确认 Windows OCR 语言包可用。".to_string();
-        let _ = app.emit("ocr-status", &message);
-        show_overlay(&app, &cfg, payload.anchor, String::new(), message)?;
+        show_user_message(
+            &app,
+            &cfg,
+            payload.anchor,
+            "没看到可识别的文字，换个区域再试试。",
+        )?;
         return Ok(());
     }
-    app.emit("ocr-status", format!("OCR：{raw_text}"))?;
+    app.emit("ocr-status", format!("已识别：{raw_text}"))?;
 
     let settings = cfg
         .provider_settings
@@ -843,10 +1011,20 @@ async fn run_pipeline(
     app.emit("ocr-status", "正在翻译...")?;
     let translated = translate_preserving_lines(&cfg, &settings, &raw_text)
         .await
-        .unwrap_or_else(|err| format!("翻译失败：{err}\n\n原文：\n{raw_text}"));
+        .unwrap_or_else(|_| format!("翻译没有成功，请稍后再试。\n\n原文：\n{raw_text}"));
     show_overlay(&app, &cfg, payload.anchor, raw_text, translated)?;
     app.emit("ocr-status", "完成")?;
     Ok(())
+}
+
+fn show_user_message(
+    app: &tauri::AppHandle,
+    cfg: &AppConfig,
+    anchor: Point,
+    message: &str,
+) -> anyhow::Result<()> {
+    let _ = app.emit("ocr-status", message);
+    show_overlay(app, cfg, anchor, String::new(), message.to_string())
 }
 
 async fn translate_preserving_lines(
@@ -1155,8 +1333,8 @@ fn main() {
                     std::env::set_var("OCR_TRANSLATOR_ONEOCR_DIR", bundled_oneocr);
                 }
             }
-            if let Err(err) = create_selection_window(app.handle()) {
-                let _ = app.emit("ocr-status", format!("选区窗口预加载失败：{err}"));
+            if let Err(err) = get_or_create_selection_box(app.handle()) {
+                let _ = app.emit("ocr-status", format!("选区框预加载失败：{err}"));
             }
             let (tx, mut rx) = mpsc::unbounded_channel();
             match app_windows::GlobalInputHook::start(tx) {

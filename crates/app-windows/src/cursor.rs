@@ -2,7 +2,10 @@ use crate::Point;
 use anyhow::{bail, Result};
 use windows::Win32::{
     Foundation::POINT,
-    UI::WindowsAndMessaging::{ClipCursor, GetCursorPos, ShowCursor},
+    UI::{
+        Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON},
+        WindowsAndMessaging::{ClipCursor, GetCursorPos, ShowCursor},
+    },
 };
 
 pub fn cursor_position() -> Result<Point> {
@@ -27,4 +30,12 @@ pub fn release_cursor_lock() -> Result<()> {
         }
     }
     bail!("释放鼠标显示状态失败")
+}
+
+pub fn left_mouse_down() -> bool {
+    unsafe { (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 }
+}
+
+pub fn right_mouse_down() -> bool {
+    unsafe { (GetAsyncKeyState(VK_RBUTTON.0 as i32) as u16 & 0x8000) != 0 }
 }

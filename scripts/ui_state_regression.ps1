@@ -3,6 +3,7 @@ $ProjectRoot = "F:\AI\dn-ocr-translator"
 
 $main = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\src\main.rs") -Raw
 $selection = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\selection.html") -Raw
+$selectionBox = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\selection-box.html") -Raw
 $index = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\index.html") -Raw
 $ui = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\main.js") -Raw
 $overlay = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\overlay.html") -Raw
@@ -13,8 +14,12 @@ $buildScript = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\build.rs") 
 $checks = @(
   @{ Name = "start hides old overlay"; Pattern = 'get_webview_window\("overlay"\)' },
   @{ Name = "start clears overlay payload"; Pattern = 'clear_overlay_payload\(app\)' },
-  @{ Name = "preload selection window"; Pattern = 'create_selection_window\(app\.handle\(\)\)' },
-  @{ Name = "start emits selection reset"; Pattern = 'emit\("selection-reset"' },
+  @{ Name = "preload selection box"; Pattern = 'get_or_create_selection_box\(app\.handle\(\)\)' },
+  @{ Name = "mouse selection mode"; Pattern = 'start_mouse_selection\(app\.clone\(\)\)' },
+  @{ Name = "selection uses left mouse polling"; Pattern = 'left_mouse_down\(\)' },
+  @{ Name = "selection uses small box window"; Pattern = 'selection-box\.html' },
+  @{ Name = "selection freezes screen before dragging"; Pattern = 'capture_frozen_screen\(\)' },
+  @{ Name = "OCR crops frozen screen after selection"; Pattern = 'crop_frozen_screen_png' },
   @{ Name = "selection listens reset"; Pattern = 'listen\("selection-reset", resetSelection\)' },
   @{ Name = "selection blur reset"; Pattern = 'addEventListener\("blur", resetSelection\)' },
   @{ Name = "selection hint mentions right click cancel"; Pattern = '右键或 Esc 取消' },
@@ -24,7 +29,7 @@ $checks = @(
 )
 
 foreach ($check in $checks) {
-  $source = if ($check.Name -like "selection*") { $selection } else { $main }
+  $source = "$main`n$selection`n$selectionBox"
   if ($source -notmatch $check.Pattern) {
     throw "[FAIL] $($check.Name)"
   }
@@ -67,6 +72,21 @@ if ($selection -match 'background:\s*rgba\(0,\s*0,\s*0' -or $selection -match '9
   throw "[FAIL] selection overlay still dims the whole screen and can flash in fullscreen games"
 }
 Write-Host "[PASS] selection overlay does not dim the whole screen"
+
+if ($main -match 'create_selection_window' -or $main -match 'WebviewUrl::App\("selection\.html' -or $main -match 'WebviewWindowBuilder::new\([^)]*"selection"') {
+  throw "[FAIL] OCR selection still creates or shows a fullscreen webview"
+}
+Write-Host "[PASS] OCR selection does not use a fullscreen webview"
+
+if ($selectionBox -notmatch 'pointer-events:\s*none' -or $selectionBox -notmatch 'border:\s*2px solid') {
+  throw "[FAIL] selection box is not a passive small rectangle overlay"
+}
+Write-Host "[PASS] selection box is a passive small rectangle overlay"
+
+if ($main -match 'OCR 失败：\{err\}' -or $main -match 'format!\("OCR 失败' -or $main -match 'show_overlay\(&app,\s*&cfg,\s*payload\.anchor,\s*String::new\(\),\s*message\)') {
+  throw "[FAIL] OCR failure messages still expose internal engine/error details"
+}
+Write-Host "[PASS] OCR failure messages are user friendly"
 
 if ($overlay -match '#translationText\s*\{[^}]*overflow:\s*hidden') {
   throw "[FAIL] overlay translation text still hides overflow"

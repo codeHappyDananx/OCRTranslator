@@ -120,6 +120,17 @@ pub fn capture_rect_png(rect: Rect) -> Result<Vec<u8>> {
     }
 }
 
+pub fn virtual_screen_rect() -> Rect {
+    unsafe {
+        Rect {
+            x: GetSystemMetrics(SM_XVIRTUALSCREEN),
+            y: GetSystemMetrics(SM_YVIRTUALSCREEN),
+            width: GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            height: GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        }
+    }
+}
+
 fn clamp_rect_to_virtual_screen(rect: Rect) -> Rect {
     unsafe {
         let left = GetSystemMetrics(SM_XVIRTUALSCREEN);
