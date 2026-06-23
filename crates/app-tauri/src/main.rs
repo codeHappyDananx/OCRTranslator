@@ -452,6 +452,14 @@ fn start_selection_window(app: &tauri::AppHandle, _cfg: &AppConfig) -> anyhow::R
         window.set_focus()?;
         return Ok(());
     }
+    let window = create_selection_window(app)?;
+    window.show()?;
+    let _ = window.emit("selection-reset", ());
+    window.set_focus()?;
+    Ok(())
+}
+
+fn create_selection_window(app: &tauri::AppHandle) -> anyhow::Result<tauri::WebviewWindow> {
     let (x, y, width, height) = if let Some(monitor) = app.primary_monitor()? {
         let pos = monitor.position();
         let size = monitor.size();
@@ -470,10 +478,7 @@ fn start_selection_window(app: &tauri::AppHandle, _cfg: &AppConfig) -> anyhow::R
             .position(x as f64, y as f64)
             .inner_size(width as f64, height as f64)
             .build()?;
-    window.show()?;
-    let _ = window.emit("selection-reset", ());
-    window.set_focus()?;
-    Ok(())
+    Ok(window)
 }
 
 fn auto_detect_selection_rect(
@@ -994,7 +999,7 @@ fn show_overlay(
             .decorations(false)
             .transparent(true)
             .always_on_top(true)
-            .focusable(false)
+            .focusable(true)
             .resizable(false)
             .skip_taskbar(true)
             .visible(false)
@@ -1021,7 +1026,7 @@ fn show_overlay(
     }
     window.set_size(PhysicalSize::new(width, height))?;
     window.set_position(PhysicalPosition::new(x, y))?;
-    let _ = window.set_focusable(false);
+    let _ = window.set_focusable(true);
     let _ = window.set_skip_taskbar(true);
     let _ = window.set_always_on_top(true);
     window.show()?;
@@ -1149,6 +1154,9 @@ fn main() {
                 if bundled_oneocr.is_dir() {
                     std::env::set_var("OCR_TRANSLATOR_ONEOCR_DIR", bundled_oneocr);
                 }
+            }
+            if let Err(err) = create_selection_window(app.handle()) {
+                let _ = app.emit("ocr-status", format!("选区窗口预加载失败：{err}"));
             }
             let (tx, mut rx) = mpsc::unbounded_channel();
             match app_windows::GlobalInputHook::start(tx) {

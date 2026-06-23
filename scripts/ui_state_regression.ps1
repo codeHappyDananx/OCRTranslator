@@ -13,6 +13,7 @@ $buildScript = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\build.rs") 
 $checks = @(
   @{ Name = "start hides old overlay"; Pattern = 'get_webview_window\("overlay"\)' },
   @{ Name = "start clears overlay payload"; Pattern = 'clear_overlay_payload\(app\)' },
+  @{ Name = "preload selection window"; Pattern = 'create_selection_window\(app\.handle\(\)\)' },
   @{ Name = "start emits selection reset"; Pattern = 'emit\("selection-reset"' },
   @{ Name = "selection listens reset"; Pattern = 'listen\("selection-reset", resetSelection\)' },
   @{ Name = "selection blur reset"; Pattern = 'addEventListener\("blur", resetSelection\)' },
@@ -61,6 +62,11 @@ if ($tauriConfig -notmatch '"productName":\s*"OCR Translator"' -or $tauriConfig 
   throw "[FAIL] Tauri window title/product/height are not updated"
 }
 Write-Host "[PASS] Tauri window title/product/height updated"
+
+if ($selection -match 'background:\s*rgba\(0,\s*0,\s*0' -or $selection -match '9999px') {
+  throw "[FAIL] selection overlay still dims the whole screen and can flash in fullscreen games"
+}
+Write-Host "[PASS] selection overlay does not dim the whole screen"
 
 if ($overlay -match '#translationText\s*\{[^}]*overflow:\s*hidden') {
   throw "[FAIL] overlay translation text still hides overflow"
@@ -166,6 +172,11 @@ if ($main -notmatch 'width,\s*[\r\n]+\s*opacity:' -or $overlay -notmatch 'payloa
   throw "[FAIL] overlay still derives initial size from stale window dimensions"
 }
 Write-Host "[PASS] overlay initial size comes from payload and content"
+
+if ($main -notmatch '\.focusable\(true\)' -or $main -notmatch 'set_focusable\(true\)') {
+  throw "[FAIL] overlay window cannot reliably receive mouse events for drag/resize"
+}
+Write-Host "[PASS] overlay window can receive mouse events for drag/resize"
 
 if ($main -notmatch 'ocr_translation_blocks' -or $main -notmatch 'flush_translation_paragraph' -or $main -match 'for line in lines') {
   throw "[FAIL] OCR translation still uses visual line-by-line translation"

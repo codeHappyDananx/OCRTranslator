@@ -8,7 +8,7 @@ $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $AppDir = Join-Path $ProjectRoot "crates\app-tauri"
 $ResourceDir = Join-Path $AppDir "resources\SnippingTool"
 $InstallerDir = Join-Path $ProjectRoot "installer"
-$PortableDir = Join-Path $InstallerDir "OCR-Translator-portable"
+$PortableDir = Join-Path $InstallerDir ("OCR-Translator-portable-build-{0:yyyyMMddHHmmss}" -f (Get-Date))
 $PortableZip = Join-Path $InstallerDir "OCR-Translator-portable-v0.1.0.zip"
 $ReleaseExe = Join-Path $ProjectRoot "target\release\ocr-translator.exe"
 
@@ -50,9 +50,14 @@ try {
   if (-not (Test-Path $InstallerDir)) {
     New-Item -ItemType Directory -Path $InstallerDir | Out-Null
   }
-  if (Test-Path $PortableDir) {
-    Remove-Item -LiteralPath $PortableDir -Recurse -Force
-  }
+  Get-ChildItem -LiteralPath $InstallerDir -Directory -Filter "OCR-Translator-portable-build-*" -ErrorAction SilentlyContinue |
+    ForEach-Object {
+      try {
+        Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction Stop
+      } catch {
+        Write-Warning "旧便携构建目录正在使用，跳过清理：$($_.FullName)"
+      }
+    }
   New-Item -ItemType Directory -Path $PortableDir | Out-Null
   Copy-Item -LiteralPath $ReleaseExe -Destination (Join-Path $PortableDir "OCR-Translator.exe") -Force
   Copy-Item -LiteralPath (Join-Path $ProjectRoot "README.md") -Destination (Join-Path $PortableDir "README.md") -Force
@@ -62,6 +67,11 @@ try {
     Remove-Item -LiteralPath $PortableZip -Force
   }
   Compress-Archive -Path (Join-Path $PortableDir "*") -DestinationPath $PortableZip -Force
+  try {
+    Remove-Item -LiteralPath $PortableDir -Recurse -Force -ErrorAction Stop
+  } catch {
+    Write-Warning "便携构建临时目录正在使用，跳过清理：$PortableDir"
+  }
 
   if (-not $SkipTauriBundle) {
     cargo tauri build
