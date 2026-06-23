@@ -20,7 +20,11 @@ export const ResizableHandle = ({
   className,
   ...props
 }: React.ComponentProps<typeof PanelResizeHandle>) => (
-  <PanelResizeHandle className={cn("resizable-handle", className)} {...props}>
+  <PanelResizeHandle
+    data-no-window-drag
+    className={cn("resizable-handle", className)}
+    {...props}
+  >
     <span className="resizable-handle-grip" />
   </PanelResizeHandle>
 );

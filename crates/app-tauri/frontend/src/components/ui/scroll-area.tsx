@@ -23,6 +23,7 @@ const ScrollBar = React.forwardRef<
   <ScrollAreaPrimitive.ScrollAreaScrollbar
     ref={ref}
     orientation={orientation}
+    data-no-window-drag
     className={cn("scroll-area-scrollbar", orientation, className)}
     {...props}
   >

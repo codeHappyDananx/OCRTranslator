@@ -7,8 +7,11 @@ import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
+  type ResizablePanelHandle,
 } from "./components/ui/resizable";
 import { invoke, listen, type Unlisten } from "./tauri";
+
+document.documentElement.classList.add("overlay-html");
 
 type OverlayPayload = {
   text: string;
@@ -88,7 +91,10 @@ function OverlayApp() {
   const [payload, setPayload] = React.useState<OverlayPayload>(emptyPayload);
   const [userSized, setUserSized] = React.useState(false);
   const cardRef = React.useRef<HTMLDivElement | null>(null);
+  const sourcePanelRef = React.useRef<ResizablePanelHandle | null>(null);
+  const translationPanelRef = React.useRef<ResizablePanelHandle | null>(null);
   const lastResize = React.useRef({ width: 0, height: 0 });
+  const ignoreResizeUntil = React.useRef(0);
 
   const rawText = cleanDisplayText(payload.raw_text);
   const translatedText = cleanDisplayText(payload.text) || "无翻译结果";
@@ -133,8 +139,20 @@ function OverlayApp() {
       const card = cardRef.current;
       if (!card) return;
       const width = Math.max(180, Math.ceil(payload.width || card.scrollWidth || 320));
-      const contentHeight = Math.ceil(card.scrollHeight || card.getBoundingClientRect().height || 54);
-      const height = Math.max(54, Math.min(contentHeight, maxHeight));
+      const sections = Array.from(card.querySelectorAll<HTMLElement>(".section-inner"));
+      const sectionHeights = sections.map((section) => Math.ceil(section.scrollHeight));
+      const handleHeight = showSource ? 2 : 0;
+      const measuredHeight = sectionHeights.reduce((sum, height) => sum + height, 0) + handleHeight;
+      const fallbackHeight = Math.ceil(card.scrollHeight || card.getBoundingClientRect().height || 54);
+      const minHeight = showSource ? 118 : 54;
+      const contentHeight = Math.max(measuredHeight, fallbackHeight, minHeight);
+      const height = Math.max(minHeight, Math.min(contentHeight, maxHeight));
+      if (showSource && sectionHeights.length >= 2) {
+        const total = Math.max(1, sectionHeights[0] + sectionHeights[1]);
+        const sourceSize = Math.min(72, Math.max(28, (sectionHeights[0] / total) * 100));
+        sourcePanelRef.current?.resize(sourceSize);
+        translationPanelRef.current?.resize(100 - sourceSize);
+      }
       if (
         Math.abs(lastResize.current.width - width) <= 1 &&
         Math.abs(lastResize.current.height - height) <= 1
@@ -142,6 +160,7 @@ function OverlayApp() {
         return;
       }
       lastResize.current = { width, height };
+      ignoreResizeUntil.current = performance.now() + 300;
       invoke("resize_overlay_to_content", { request: { width, height } }).catch(() => {});
     };
     frame = window.requestAnimationFrame(resize);
@@ -150,6 +169,7 @@ function OverlayApp() {
 
   React.useEffect(() => {
     function onResize() {
+      if (performance.now() < ignoreResizeUntil.current) return;
       setUserSized(true);
     }
     window.addEventListener("resize", onResize);
@@ -189,8 +209,8 @@ function OverlayApp() {
       >
         <CardContent>
           {showSource ? (
-            <ResizablePanelGroup direction="vertical" data-no-window-drag>
-              <ResizablePanel defaultSize={38} minSize={18}>
+            <ResizablePanelGroup direction="vertical">
+              <ResizablePanel ref={sourcePanelRef} defaultSize={48} minSize={24}>
                 <TranslationSection
                   title="原文"
                   text={rawText}
@@ -200,7 +220,7 @@ function OverlayApp() {
                 />
               </ResizablePanel>
               <ResizableHandle />
-              <ResizablePanel defaultSize={62} minSize={24}>
+              <ResizablePanel ref={translationPanelRef} defaultSize={52} minSize={24}>
                 <TranslationSection
                   title="译文"
                   text={translatedText}

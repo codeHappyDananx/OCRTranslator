@@ -160,6 +160,8 @@ input[type="color"] {
 }
 
 .overlay-body,
+.overlay-html,
+.overlay-html body,
 .overlay-body #root {
   width: 100vw;
   height: 100vh;
@@ -168,6 +170,7 @@ input[type="color"] {
   margin: 0;
   overflow: hidden;
   background: transparent;
+  color: white;
   user-select: none;
 }
 
@@ -223,8 +226,8 @@ input[type="color"] {
 
 .resizable-handle {
   position: relative;
-  flex: 0 0 8px;
-  background: rgba(255, 255, 255, 0.08);
+  flex: 0 0 2px;
+  background: rgba(255, 255, 255, 0.14);
   outline: none;
 }
 
@@ -235,11 +238,11 @@ input[type="color"] {
 
 .resizable-handle-grip {
   position: absolute;
-  top: 3px;
+  top: 0;
   left: 50%;
-  width: 34px;
+  width: 42px;
   height: 2px;
-  background: rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.38);
   border-radius: 999px;
   transform: translateX(-50%);
 }
@@ -263,7 +266,7 @@ input[type="color"] {
   width: 100%;
   min-width: 0;
   min-height: 100%;
-  padding: 6px 12px 14px;
+  padding: 7px 12px 12px;
 }
 
 .section-title {
@@ -311,12 +314,12 @@ input[type="color"] {
   padding: 2px;
   touch-action: none;
   user-select: none;
-  background: rgba(0, 0, 0, 0.08);
+  background: transparent;
   transition: background 120ms ease;
 }
 
 .scroll-area-scrollbar.vertical {
-  width: 8px;
+  width: 7px;
 }
 
 .scroll-area-thumb {

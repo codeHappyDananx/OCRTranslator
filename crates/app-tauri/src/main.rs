@@ -995,7 +995,8 @@ fn show_overlay(
 ) -> anyhow::Result<()> {
     cleanup_selection_layers(app);
     let display_raw_text = ocr_display_text(&raw_text);
-    let display_text = if cfg.overlay.show_source && !display_raw_text.trim().is_empty() {
+    let has_source = cfg.overlay.show_source && !display_raw_text.trim().is_empty();
+    let display_text = if has_source {
         format!("{display_raw_text}\n\n{text}")
     } else {
         text.clone()
@@ -1060,7 +1061,8 @@ fn show_overlay(
         }
     }
     window.set_size(PhysicalSize::new(width, height))?;
-    let _ = window.set_min_size(Some(PhysicalSize::new(180, 54)));
+    let min_height = if has_source { 118 } else { 54 };
+    let _ = window.set_min_size(Some(PhysicalSize::new(180, min_height)));
     window.set_position(PhysicalPosition::new(x, y))?;
     let _ = window.set_focusable(true);
     let _ = window.set_skip_taskbar(true);
