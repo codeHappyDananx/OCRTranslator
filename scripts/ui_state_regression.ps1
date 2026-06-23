@@ -73,10 +73,10 @@ if ($overlay -notmatch 'id="sourceBlock"' -or $overlay -notmatch 'id="translatio
 }
 Write-Host "[PASS] overlay source/translation blocks present"
 
-if ($overlay -match 'id="card"' -or $overlay -match '#card') {
-  throw "[FAIL] overlay still has an outer card wrapper"
+if ($overlay -notmatch 'id="card"' -or $overlay -notmatch '#card\s*\{[^}]*display:\s*flex') {
+  throw "[FAIL] overlay does not use a single card layout for content and resize handle"
 }
-Write-Host "[PASS] overlay has no outer card wrapper"
+Write-Host "[PASS] overlay uses a single card layout"
 
 if ($overlay -notmatch '#blocks\s*\{[^}]*gap:\s*0') {
   throw "[FAIL] overlay blocks are not joined"
@@ -128,12 +128,12 @@ if ($overlay -notmatch 'getBoundingClientRect\(\)' -or $overlay -notmatch 'conte
 }
 Write-Host "[PASS] overlay measures rendered content and scrolling state"
 
-if ($overlay -notmatch 'addEventListener\("resize",\s*scheduleResizeToContent\)' -or $overlay -notmatch 'window\.innerWidth' -or $main -notmatch '\.resizable\(true\)') {
+if ($overlay -notmatch 'addEventListener\("resize"' -or $overlay -notmatch 'setTimeout\(scheduleResizeToContent,\s*80\)' -or $overlay -notmatch 'window\.innerWidth' -or $main -notmatch '\.resizable\(true\)') {
   throw "[FAIL] overlay does not reflow when manually resized"
 }
 Write-Host "[PASS] overlay reflows when manually resized"
 
-if ($overlay -notmatch 'id="resizeHandle"' -or $overlay -notmatch 'pointerdown' -or $overlay -notmatch 'ew-resize') {
+if ($overlay -notmatch 'id="resizeHandle"' -or $overlay -notmatch 'pointerdown' -or $overlay -notmatch 'ew-resize' -or $overlay -notmatch 'flex:\s*0 0 6px') {
   throw "[FAIL] overlay does not expose a custom width resize handle"
 }
 Write-Host "[PASS] overlay exposes custom width resize handle"
