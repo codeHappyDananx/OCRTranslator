@@ -617,6 +617,7 @@ fn get_or_create_selection_box(app: &tauri::AppHandle) -> anyhow::Result<tauri::
         .inner_size(1.0, 1.0)
         .build()?
     };
+    let _ = window.set_ignore_cursor_events(true);
     Ok(window)
 }
 

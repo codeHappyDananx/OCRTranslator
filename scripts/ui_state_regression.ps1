@@ -83,6 +83,11 @@ if ($selectionBox -notmatch 'pointer-events:\s*none' -or $selectionBox -notmatch
 }
 Write-Host "[PASS] selection box is a passive small rectangle overlay"
 
+if ($main -notmatch 'set_ignore_cursor_events\(true\)') {
+  throw "[FAIL] selection box can still capture mouse input"
+}
+Write-Host "[PASS] selection box ignores mouse input"
+
 if ($main -match 'OCR 失败：\{err\}' -or $main -match 'format!\("OCR 失败' -or $main -match 'show_overlay\(&app,\s*&cfg,\s*payload\.anchor,\s*String::new\(\),\s*message\)') {
   throw "[FAIL] OCR failure messages still expose internal engine/error details"
 }
