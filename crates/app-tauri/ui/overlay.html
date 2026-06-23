@@ -8,7 +8,7 @@
       html,
       body {
         width: 100%;
-        height: auto;
+        height: 100%;
         min-height: 0;
         margin: 0;
         overflow: hidden;
@@ -25,10 +25,10 @@
       }
       #card {
         position: relative;
-        width: var(--overlay-width, 320px);
-        height: auto;
+        width: 100vw;
+        height: 100vh;
         min-height: 0;
-        max-height: 620px;
+        max-height: 100vh;
         display: flex;
         align-items: stretch;
         overflow: hidden;
@@ -38,9 +38,9 @@
         flex: 1 1 auto;
         width: auto;
         min-width: 0;
-        height: auto;
+        height: 100%;
         min-height: 0;
-        max-height: inherit;
+        max-height: 100%;
         padding: 0;
         color: white;
         display: flex;
@@ -233,9 +233,7 @@
       let resizeTimer = 0;
       let lastResizeRequest = { width: 0, height: 0 };
       let baseWidth = 320;
-      let manualWidth = null;
-      let manualHeight = null;
-      let resizing = null;
+      let userSized = false;
 
       function cleanDisplayText(value) {
         return String(value ?? "")
@@ -274,14 +272,9 @@
           "#127858",
         );
         blocks.style.fontSize = `${payload.font_size ?? 18}px`;
-        card.style.maxHeight = `${maxHeight}px`;
         blocks.classList.remove("scrolling");
         baseWidth = Math.max(180, Math.min(900, Number(payload.width ?? 320)));
-        card.style.width = `${baseWidth}px`;
-        card.style.height = "auto";
-        blocks.style.height = "auto";
-        manualWidth = null;
-        manualHeight = null;
+        userSized = false;
         lastResizeRequest = { width: 0, height: 0 };
         doubleClickClose = payload.double_click_close !== false;
         draggable = payload.draggable !== false;
@@ -296,26 +289,27 @@
         resizeFrame = requestAnimationFrame(resizeToContent);
       }
 
+      function updateScrollState() {
+        blocks.classList.toggle("scrolling", blocks.scrollHeight > blocks.clientHeight + 1);
+      }
+
       async function resizeToContent() {
-        blocks.style.height = "auto";
-        blocks.style.minHeight = "0";
+        if (userSized) {
+          updateScrollState();
+          return;
+        }
         const contentHeight =
           sourceBlock.getBoundingClientRect().height +
           translationBlock.getBoundingClientRect().height;
         blocks.classList.toggle("scrolling", contentHeight > maxHeight + 1);
-        const cardRect = card.getBoundingClientRect();
-        const width = Math.ceil(manualWidth ?? baseWidth ?? cardRect.width ?? 180);
-        card.style.width = `${Math.max(width, 160)}px`;
+        const width = Math.ceil(baseWidth || card.getBoundingClientRect().width || 180);
         const measuredHeight = Math.max(blocks.scrollHeight, contentHeight);
-        const height = Math.ceil(manualHeight ?? Math.min(measuredHeight, maxHeight) + 2);
-        if (manualHeight !== null) {
-          card.style.height = `${height}px`;
-          blocks.style.height = `${height}px`;
-        }
+        const height = Math.ceil(Math.min(measuredHeight, maxHeight) + 2);
         if (
           Math.abs(lastResizeRequest.width - width) <= 1 &&
           Math.abs(lastResizeRequest.height - height) <= 1
         ) {
+          updateScrollState();
           return;
         }
         lastResizeRequest = { width, height };
@@ -364,108 +358,39 @@
         event.preventDefault();
         await invoke("start_overlay_drag").catch(() => {});
       });
-      resizeHandle.addEventListener("pointerdown", (event) => {
+
+      function stopNativeResize() {
+        resizeHandle.classList.remove("resizing");
+        cornerResizeHandle.classList.remove("resizing");
+        requestAnimationFrame(updateScrollState);
+      }
+
+      resizeHandle.addEventListener("pointerdown", async (event) => {
         if (event.button !== 0) return;
         event.preventDefault();
         event.stopPropagation();
-        resizeHandle.setPointerCapture(event.pointerId);
+        userSized = true;
         resizeHandle.classList.add("resizing");
-        resizing = {
-          pointerId: event.pointerId,
-          startX: event.screenX,
-          startWidth: card.getBoundingClientRect().width || baseWidth || 160,
-          pendingWidth: card.getBoundingClientRect().width || baseWidth || 160,
-          startHeight: card.getBoundingClientRect().height || blocks.getBoundingClientRect().height || 54,
-          pendingHeight: card.getBoundingClientRect().height || blocks.getBoundingClientRect().height || 54,
-          mode: "width",
-          frame: 0,
-        };
+        await invoke("start_overlay_resize_width").catch(() => {});
       });
-      resizeHandle.addEventListener("pointermove", (event) => {
-        if (!resizing || resizing.pointerId !== event.pointerId) return;
-        event.preventDefault();
-        const width = Math.max(180, Math.min(900, resizing.startWidth + event.screenX - resizing.startX));
-        resizing.pendingWidth = width;
-        manualWidth = width;
-        card.style.width = `${Math.round(width)}px`;
-        if (resizing.frame) return;
-        resizing.frame = requestAnimationFrame(async () => {
-          if (!resizing) return;
-          const requestWidth = Math.round(resizing.pendingWidth);
-          resizing.frame = 0;
-          await invoke("resize_overlay_width", {
-            request: {
-              width: requestWidth,
-            },
-          }).catch(() => {});
-        });
-      });
-      function stopResize(event) {
-        if (!resizing || resizing.pointerId !== event.pointerId) return;
-        if (resizing.frame) {
-          cancelAnimationFrame(resizing.frame);
-        }
-        manualWidth = Math.max(180, Math.min(900, resizing.pendingWidth));
-        if (resizing.mode === "corner") {
-          manualHeight = Math.max(54, Math.min(maxHeight, resizing.pendingHeight));
-        }
-        resizing = null;
-        resizeHandle.classList.remove("resizing");
-        cornerResizeHandle.classList.remove("resizing");
-        scheduleResizeToContent();
-      }
-      resizeHandle.addEventListener("pointerup", stopResize);
-      resizeHandle.addEventListener("pointercancel", stopResize);
+
       cornerResizeHandle.addEventListener("pointerdown", (event) => {
         if (event.button !== 0) return;
         event.preventDefault();
         event.stopPropagation();
-        cornerResizeHandle.setPointerCapture(event.pointerId);
+        userSized = true;
         cornerResizeHandle.classList.add("resizing");
-        const rect = card.getBoundingClientRect();
-        resizing = {
-          pointerId: event.pointerId,
-          startX: event.screenX,
-          startY: event.screenY,
-          startWidth: rect.width || baseWidth || 160,
-          startHeight: rect.height || blocks.getBoundingClientRect().height || 54,
-          pendingWidth: rect.width || baseWidth || 160,
-          pendingHeight: rect.height || blocks.getBoundingClientRect().height || 54,
-          mode: "corner",
-          frame: 0,
-        };
+        invoke("start_overlay_resize_corner").catch(() => {});
       });
-      cornerResizeHandle.addEventListener("pointermove", (event) => {
-        if (!resizing || resizing.pointerId !== event.pointerId || resizing.mode !== "corner") return;
-        event.preventDefault();
-        const width = Math.max(180, Math.min(900, resizing.startWidth + event.screenX - resizing.startX));
-        const height = Math.max(54, Math.min(maxHeight, resizing.startHeight + event.screenY - resizing.startY));
-        resizing.pendingWidth = width;
-        resizing.pendingHeight = height;
-        manualWidth = width;
-        manualHeight = height;
-        card.style.width = `${Math.round(width)}px`;
-        card.style.height = `${Math.round(height)}px`;
-        blocks.style.height = `${Math.round(height)}px`;
-        blocks.classList.toggle("scrolling", blocks.scrollHeight > height + 1);
-        if (resizing.frame) return;
-        resizing.frame = requestAnimationFrame(async () => {
-          if (!resizing) return;
-          const requestWidth = Math.round(resizing.pendingWidth);
-          const requestHeight = Math.round(resizing.pendingHeight);
-          resizing.frame = 0;
-          await invoke("resize_overlay_manual", {
-            request: {
-              width: requestWidth,
-              height: requestHeight,
-            },
-          }).catch(() => {});
-        });
-      });
-      cornerResizeHandle.addEventListener("pointerup", stopResize);
-      cornerResizeHandle.addEventListener("pointercancel", stopResize);
+
+      window.addEventListener("pointerup", stopNativeResize);
+      window.addEventListener("pointercancel", stopNativeResize);
+      window.addEventListener("blur", stopNativeResize);
       window.addEventListener("resize", () => {
-        if (resizing) return;
+        if (userSized) {
+          requestAnimationFrame(updateScrollState);
+          return;
+        }
         clearTimeout(resizeTimer);
         resizeTimer = setTimeout(scheduleResizeToContent, 80);
       });

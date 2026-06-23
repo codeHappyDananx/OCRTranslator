@@ -6,9 +6,9 @@ use app_core::{
 use app_windows::{
     available_windows_ocr_languages, capture_rect_png, cursor_position, detect_ocr_engines,
     install_snippingtool_oneocr_runtime, preview_snippingtool_oneocr_package,
-    recognize_png_pipeline, release_cursor_lock, select_rect_native, virtual_screen_rect,
-    GlobalInputEvent, KeyboardEvent, MouseButton, OcrEngineStatus, OcrLanguageInfo,
-    OcrPipelineRequest, OneOcrPackageInfo, Point, Rect,
+    recognize_png_pipeline, release_cursor_lock, select_rect_native, start_native_window_resize,
+    virtual_screen_rect, GlobalInputEvent, KeyboardEvent, MouseButton, NativeResizeDirection,
+    OcrEngineStatus, OcrLanguageInfo, OcrPipelineRequest, OneOcrPackageInfo, Point, Rect,
 };
 use image::{ImageFormat, RgbaImage};
 use serde::{Deserialize, Serialize};
@@ -73,17 +73,6 @@ struct OverlayPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct OverlayResizeRequest {
-    width: u32,
-    height: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct OverlayWidthRequest {
-    width: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct OverlayManualResizeRequest {
     width: u32,
     height: u32,
 }
@@ -327,6 +316,26 @@ fn start_overlay_drag(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn start_overlay_resize_width(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("overlay") {
+        let hwnd = window.hwnd().map_err(|e| e.to_string())?;
+        start_native_window_resize(hwnd.0 as isize, NativeResizeDirection::East)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn start_overlay_resize_corner(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("overlay") {
+        let hwnd = window.hwnd().map_err(|e| e.to_string())?;
+        start_native_window_resize(hwnd.0 as isize, NativeResizeDirection::SouthEast)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn resize_overlay_to_content(
     request: OverlayResizeRequest,
     app: tauri::AppHandle,
@@ -358,68 +367,6 @@ fn resize_overlay_to_content(
         let max_height = (bottom - top).max(54) as u32;
         width = width.min(max_width);
         height = height.min(max_height);
-        if x + width as i32 > right {
-            x = (right - width as i32).max(left);
-        }
-        if y + height as i32 > bottom {
-            y = (bottom - height as i32).max(top);
-        }
-        x = x.max(left);
-        y = y.max(top);
-    }
-
-    window
-        .set_size(PhysicalSize::new(width, height))
-        .map_err(|e| e.to_string())?;
-    window
-        .set_position(PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-fn resize_overlay_width(request: OverlayWidthRequest, app: tauri::AppHandle) -> Result<(), String> {
-    let Some(window) = app.get_webview_window("overlay") else {
-        return Ok(());
-    };
-    let size = window.outer_size().map_err(|e| e.to_string())?;
-    let width = request.width.clamp(180, 900);
-    window
-        .set_size(PhysicalSize::new(width, size.height.max(54)))
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-fn resize_overlay_manual(
-    request: OverlayManualResizeRequest,
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let cfg = state
-        .config
-        .lock()
-        .map_err(|e| format!("读取配置锁失败：{e}"))?
-        .clone();
-    let Some(window) = app.get_webview_window("overlay") else {
-        return Ok(());
-    };
-    let current = window.outer_position().map_err(|e| e.to_string())?;
-    let mut width = request.width.clamp(180, 900);
-    let mut height = request.height.max(54);
-    let mut x = current.x;
-    let mut y = current.y;
-
-    if let Some(monitor) = app.primary_monitor().map_err(|e| e.to_string())? {
-        let pos = monitor.position();
-        let size = monitor.size();
-        let margin = cfg.overlay.screen_margin;
-        let left = pos.x + margin;
-        let top = pos.y + margin;
-        let right = pos.x + size.width as i32 - margin;
-        let bottom = pos.y + size.height as i32 - margin;
-        width = width.min((right - left).max(180) as u32);
-        height = height.min((bottom - top).max(54) as u32);
         if x + width as i32 > right {
             x = (right - width as i32).max(left);
         }
@@ -1162,7 +1109,7 @@ fn show_overlay(
             .transparent(true)
             .always_on_top(true)
             .focusable(true)
-            .resizable(false)
+            .resizable(true)
             .skip_taskbar(true)
             .visible(false)
             .inner_size(width as f64, height as f64)
@@ -1187,6 +1134,7 @@ fn show_overlay(
         }
     }
     window.set_size(PhysicalSize::new(width, height))?;
+    let _ = window.set_min_size(Some(PhysicalSize::new(180, 54)));
     window.set_position(PhysicalPosition::new(x, y))?;
     let _ = window.set_focusable(true);
     let _ = window.set_skip_taskbar(true);
@@ -1381,9 +1329,9 @@ fn main() {
             selection_cancel,
             close_overlay,
             start_overlay_drag,
+            start_overlay_resize_width,
+            start_overlay_resize_corner,
             resize_overlay_to_content,
-            resize_overlay_width,
-            resize_overlay_manual,
             get_overlay_payload,
             get_cursor_position
         ])

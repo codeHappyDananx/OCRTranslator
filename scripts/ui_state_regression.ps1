@@ -41,8 +41,8 @@ $mustHave = @(
   @{ Name = "source background color picker"; Pattern = 'id="sourceBackground" type="color"' },
   @{ Name = "translation background color picker"; Pattern = 'id="translationBackground" type="color"' },
   @{ Name = "overlay content resize command"; Pattern = 'resize_overlay_to_content' },
-  @{ Name = "overlay width resize command"; Pattern = 'resize_overlay_width' },
-  @{ Name = "overlay manual size resize command"; Pattern = 'resize_overlay_manual' },
+  @{ Name = "overlay native width resize command"; Pattern = 'start_overlay_resize_width' },
+  @{ Name = "overlay native corner resize command"; Pattern = 'start_overlay_resize_corner' },
   @{ Name = "overlay drag command"; Pattern = 'start_overlay_drag' },
   @{ Name = "settings autosave function"; Pattern = 'function scheduleSave' },
   @{ Name = "show source participates in autosave"; Pattern = 'els\.showSource' }
@@ -175,7 +175,7 @@ if ($overlay -notmatch 'getBoundingClientRect\(\)' -or $overlay -notmatch 'conte
 }
 Write-Host "[PASS] overlay measures rendered content and scrolling state"
 
-if ($overlay -notmatch 'addEventListener\("resize"' -or $overlay -notmatch 'setTimeout\(scheduleResizeToContent,\s*80\)' -or $main -notmatch '\.resizable\(false\)') {
+if ($overlay -notmatch 'addEventListener\("resize"' -or $overlay -notmatch 'setTimeout\(scheduleResizeToContent,\s*80\)' -or $main -notmatch '\.resizable\(true\)') {
   throw "[FAIL] overlay does not reflow when manually resized"
 }
 Write-Host "[PASS] overlay reflows when manually resized"
@@ -185,7 +185,7 @@ if ($overlay -notmatch 'id="resizeHandle"' -or $overlay -notmatch 'pointerdown' 
 }
 Write-Host "[PASS] overlay exposes custom width resize handle"
 
-if ($overlay -notmatch 'id="cornerResizeHandle"' -or $overlay -notmatch 'nwse-resize' -or $overlay -notmatch 'resize_overlay_manual') {
+if ($overlay -notmatch 'id="cornerResizeHandle"' -or $overlay -notmatch 'nwse-resize' -or $overlay -notmatch 'start_overlay_resize_corner') {
   throw "[FAIL] overlay does not expose a custom width/height resize handle"
 }
 Write-Host "[PASS] overlay exposes custom width/height resize handle"
@@ -220,12 +220,12 @@ if ($main -notmatch 'ocr_translation_blocks' -or $main -notmatch 'flush_translat
 }
 Write-Host "[PASS] OCR translation uses semantic paragraph blocks"
 
-if ($overlay -notmatch 'manualWidth' -or $overlay -notmatch 'manualHeight' -or $overlay -notmatch 'blocks\.scrollHeight' -or $overlay -notmatch 'resize_overlay_width') {
-  throw "[FAIL] overlay manual resize state or full content height measurement is missing"
+if ($overlay -notmatch 'userSized' -or $overlay -notmatch 'blocks\.scrollHeight' -or $overlay -notmatch 'start_overlay_resize_width') {
+  throw "[FAIL] overlay native resize state or full content height measurement is missing"
 }
-Write-Host "[PASS] overlay preserves manual width and measures full content height"
+Write-Host "[PASS] overlay preserves native resize state and measures full content height"
 
-if ($overlay -match 'pointermove[\s\S]{0,900}resize_overlay_to_content' -or $overlay -match 'resize_overlay_width[\s\S]{0,240}height:') {
+if ($overlay -match 'pointermove[\s\S]{0,900}resize_overlay_to_content' -or $overlay -match 'resize_overlay_width' -or $overlay -match 'resize_overlay_manual') {
   throw "[FAIL] overlay width drag still changes content height during pointer move"
 }
 Write-Host "[PASS] overlay width drag does not change content height"
