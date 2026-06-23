@@ -2170,6 +2170,7 @@ dependencies = [
  "anyhow",
  "app-core",
  "app-windows",
+ "base64 0.22.1",
  "embed-resource",
  "image",
  "serde",

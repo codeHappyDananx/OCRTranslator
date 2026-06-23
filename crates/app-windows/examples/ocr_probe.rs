@@ -21,11 +21,17 @@ async fn main() -> Result<()> {
     let engine = &args[0];
     let image_path = &args[1];
     let png = fs::read(image_path).with_context(|| format!("读取图片失败：{image_path}"))?;
-    let text = match engine.as_str() {
-        "windows" => recognize_png_windows_ocr(&png, "en").await?,
+    let (text, lines) = match engine.as_str() {
+        "windows" => (recognize_png_windows_ocr(&png, "en").await?, Vec::new()),
         "oneocr" | "snippingtool" => recognize_png_snippingtool_oneocr(&png).await?,
         other => bail!("Unknown OCR engine: {other}"),
     };
     println!("{text}");
+    if !lines.is_empty() {
+        println!("\n-- boxes --");
+        for line in lines {
+            println!("{}\t{:?}", line.text, line.bbox);
+        }
+    }
     Ok(())
 }

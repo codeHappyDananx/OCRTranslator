@@ -14,9 +14,14 @@ import { invoke, listen, type Unlisten } from "./tauri";
 document.documentElement.classList.add("overlay-html");
 
 type OverlayPayload = {
+  result_mode: "text_overlay" | "image_replace";
   text: string;
   raw_text: string;
   width: number;
+  image_width: number;
+  image_height: number;
+  source_image_data_url?: string | null;
+  image_blocks: ImageReplacementBlock[];
   opacity: number;
   font_size: number;
   max_height: number;
@@ -27,10 +32,28 @@ type OverlayPayload = {
   draggable: boolean;
 };
 
+type ImageReplacementBlock = {
+  source_text: string;
+  translated_text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  font_size: number;
+  background: string;
+  color: string;
+  align: "left" | "center" | "right";
+};
+
 const emptyPayload: OverlayPayload = {
+  result_mode: "text_overlay",
   text: "",
   raw_text: "",
   width: 320,
+  image_width: 320,
+  image_height: 240,
+  source_image_data_url: null,
+  image_blocks: [],
   opacity: 0.55,
   font_size: 18,
   max_height: 620,
@@ -87,6 +110,15 @@ function TranslationSection({
   );
 }
 
+function rgbaFromHex(hex: string, opacity = 1) {
+  if (!/^#[0-9a-f]{6}$/i.test(hex)) return `rgba(5, 5, 5, ${opacity})`;
+  const intValue = Number.parseInt(hex.slice(1), 16);
+  const r = (intValue >> 16) & 255;
+  const g = (intValue >> 8) & 255;
+  const b = intValue & 255;
+  return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+}
+
 function OverlayApp() {
   const [payload, setPayload] = React.useState<OverlayPayload>(emptyPayload);
   const [userSized, setUserSized] = React.useState(false);
@@ -98,6 +130,10 @@ function OverlayApp() {
 
   const rawText = cleanDisplayText(payload.raw_text);
   const translatedText = cleanDisplayText(payload.text) || "无翻译结果";
+  const imageReplaceMode =
+    payload.result_mode === "image_replace" &&
+    Boolean(payload.source_image_data_url) &&
+    payload.image_blocks.length > 0;
   const showSource = payload.show_source !== false && rawText.length > 0;
   const opacity = payload.opacity ?? 0.55;
   const maxHeight = Math.max(120, Number(payload.max_height ?? 620));
@@ -138,6 +174,20 @@ function OverlayApp() {
     const resize = () => {
       const card = cardRef.current;
       if (!card) return;
+      if (imageReplaceMode) {
+        const width = Math.max(80, Math.ceil(payload.image_width || payload.width || 320));
+        const height = Math.max(36, Math.ceil(payload.image_height || 240));
+        if (
+          Math.abs(lastResize.current.width - width) <= 1 &&
+          Math.abs(lastResize.current.height - height) <= 1
+        ) {
+          return;
+        }
+        lastResize.current = { width, height };
+        ignoreResizeUntil.current = performance.now() + 300;
+        invoke("resize_overlay_to_content", { request: { width, height } }).catch(() => {});
+        return;
+      }
       const width = Math.max(180, Math.ceil(payload.width || card.scrollWidth || 320));
       const sections = Array.from(card.querySelectorAll<HTMLElement>(".section-inner"));
       const sectionHeights = sections.map((section) => Math.ceil(section.scrollHeight));
@@ -165,7 +215,7 @@ function OverlayApp() {
     };
     frame = window.requestAnimationFrame(resize);
     return () => window.cancelAnimationFrame(frame);
-  }, [payload, showSource, rawText, translatedText, maxHeight, userSized]);
+  }, [payload, imageReplaceMode, showSource, rawText, translatedText, maxHeight, userSized]);
 
   React.useEffect(() => {
     function onResize() {
@@ -198,54 +248,97 @@ function OverlayApp() {
   }
 
   const fontSize = `${payload.font_size ?? 18}px`;
+  const replacementFontSize = `${Math.max(14, Math.min(payload.font_size ?? 18, 30))}px`;
 
   return (
     <div className="overlay-stage" onDoubleClick={closeOverlay}>
       <Card
         ref={cardRef}
-        className={`translation-card${payload.draggable !== false ? " draggable" : ""}`}
-        style={{ fontSize, maxHeight }}
+        className={`${imageReplaceMode ? "image-replace-card" : "translation-card"}${
+          payload.draggable !== false ? " draggable" : ""
+        }`}
+        style={
+          imageReplaceMode
+            ? {
+                width: payload.image_width,
+                height: payload.image_height,
+                fontSize: replacementFontSize,
+              }
+            : { fontSize, maxHeight }
+        }
         onMouseDown={startDrag}
       >
-        <CardContent>
-          {showSource ? (
-            <ResizablePanelGroup direction="vertical">
-              <ResizablePanel ref={sourcePanelRef} defaultSize={48} minSize={24}>
-                <TranslationSection
-                  title="原文"
-                  text={rawText}
-                  titleVisible
-                  className="source-section"
-                  style={{ background: sourceBackground, borderRadius: "8px 8px 0 0" }}
-                />
-              </ResizablePanel>
-              <ResizableHandle />
-              <ResizablePanel ref={translationPanelRef} defaultSize={52} minSize={24}>
+        {imageReplaceMode ? (
+          <div className="image-replace-surface">
+            <img
+              className="image-replace-source"
+              src={payload.source_image_data_url ?? ""}
+              aria-hidden="true"
+            />
+            <div className="image-replace-block-layer" aria-label="图片翻译结果">
+              {payload.image_blocks.map((block, index) => (
+                <div
+                  key={`${index}-${block.x}-${block.y}`}
+                  className={`image-replace-block align-${block.align || "left"}`}
+                  title={block.source_text}
+                  style={{
+                    left: block.x,
+                    top: block.y,
+                    width: block.width,
+                    height: block.height,
+                    color: block.color,
+                    background: rgbaFromHex(block.background, 0.96),
+                    fontSize: block.font_size,
+                  }}
+                >
+                  <span>{cleanDisplayText(block.translated_text)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <>
+            <CardContent>
+              {showSource ? (
+                <ResizablePanelGroup direction="vertical">
+                  <ResizablePanel ref={sourcePanelRef} defaultSize={48} minSize={24}>
+                    <TranslationSection
+                      title="原文"
+                      text={rawText}
+                      titleVisible
+                      className="source-section"
+                      style={{ background: sourceBackground, borderRadius: "8px 8px 0 0" }}
+                    />
+                  </ResizablePanel>
+                  <ResizableHandle />
+                  <ResizablePanel ref={translationPanelRef} defaultSize={52} minSize={24}>
+                    <TranslationSection
+                      title="译文"
+                      text={translatedText}
+                      titleVisible
+                      className="translation-section-body"
+                      style={{ background: translationBackground, borderRadius: "0 0 8px 8px" }}
+                    />
+                  </ResizablePanel>
+                </ResizablePanelGroup>
+              ) : (
                 <TranslationSection
                   title="译文"
                   text={translatedText}
-                  titleVisible
-                  className="translation-section-body"
-                  style={{ background: translationBackground, borderRadius: "0 0 8px 8px" }}
+                  titleVisible={false}
+                  className="translation-section-body solo"
+                  style={{ background: translationBackground, borderRadius: 8 }}
                 />
-              </ResizablePanel>
-            </ResizablePanelGroup>
-          ) : (
-            <TranslationSection
-              title="译文"
-              text={translatedText}
-              titleVisible={false}
-              className="translation-section-body solo"
-              style={{ background: translationBackground, borderRadius: 8 }}
+              )}
+            </CardContent>
+            <button
+              aria-label="调整浮窗大小"
+              className="window-resize-grip"
+              data-no-window-drag
+              onPointerDown={startResize}
             />
-          )}
-        </CardContent>
-        <button
-          aria-label="调整浮窗大小"
-          className="window-resize-grip"
-          data-no-window-drag
-          onPointerDown={startResize}
-        />
+          </>
+        )}
       </Card>
     </div>
   );

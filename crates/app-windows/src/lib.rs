@@ -18,5 +18,5 @@ pub use ocr::{
     OneOcrPackageInfo,
 };
 pub use overlay_window::{start_native_window_resize, NativeResizeDirection};
-pub use pipeline::{recognize_png_pipeline, OcrPipelineRequest, OcrPipelineResult};
+pub use pipeline::{recognize_png_pipeline, OcrPipelineRequest, OcrPipelineResult, OcrTextLine};
 pub use screen::{capture_rect_png, virtual_screen_rect};

@@ -19,6 +19,7 @@ type ProviderInfo = {
 };
 
 type OverlayConfig = {
+  result_mode: "text_overlay" | "image_replace";
   width: number;
   offset_x: number;
   offset_y: number;
@@ -58,6 +59,7 @@ const defaultAppBehavior: AppBehaviorConfig = {
 };
 
 const defaultOverlay: OverlayConfig = {
+  result_mode: "text_overlay",
   width: 320,
   offset_x: 0,
   offset_y: 0,
@@ -333,6 +335,20 @@ function SettingsApp() {
 
         <article className="panel">
           <h2>浮窗设置</h2>
+          <label className="field">
+            结果展示模式
+            <select
+              value={config.overlay.result_mode}
+              onChange={(event) =>
+                setOverlay({
+                  result_mode: event.target.value as OverlayConfig["result_mode"],
+                })
+              }
+            >
+              <option value="text_overlay">原文/译文浮窗</option>
+              <option value="image_replace">原图替换翻译</option>
+            </select>
+          </label>
           <label className="field">
             默认宽度
             <input

@@ -9,8 +9,9 @@ use app_windows::{
     preview_snippingtool_oneocr_package, recognize_png_pipeline, release_cursor_lock,
     select_rect_native, start_native_window_resize, virtual_screen_rect, GlobalInputEvent,
     KeyboardEvent, MouseButton, NativeResizeDirection, OcrEngineStatus, OcrLanguageInfo,
-    OcrPipelineRequest, OneOcrPackageInfo, Point, Rect,
+    OcrPipelineRequest, OcrTextLine, OneOcrPackageInfo, Point, Rect,
 };
+use base64::{engine::general_purpose, Engine as _};
 use image::{ImageFormat, RgbaImage};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -81,9 +82,14 @@ struct FrozenScreen {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct OverlayPayload {
+    result_mode: String,
     text: String,
     raw_text: String,
     width: u32,
+    image_width: u32,
+    image_height: u32,
+    source_image_data_url: Option<String>,
+    image_blocks: Vec<ImageReplacementBlock>,
     opacity: f32,
     font_size: u32,
     max_height: u32,
@@ -92,6 +98,20 @@ struct OverlayPayload {
     double_click_close: bool,
     show_source: bool,
     draggable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ImageReplacementBlock {
+    source_text: String,
+    translated_text: String,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    font_size: u32,
+    background: String,
+    color: String,
+    align: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -992,10 +1012,36 @@ async fn run_pipeline(
         .cloned()
         .unwrap_or_default();
     app.emit("ocr-status", "正在翻译...")?;
-    let translated = translate_preserving_lines(&cfg, &settings, &raw_text)
-        .await
-        .unwrap_or_else(|_| format!("翻译没有成功，请稍后再试。\n\n原文：\n{raw_text}"));
-    show_overlay(&app, &cfg, payload.anchor, raw_text, translated)?;
+    let image_blocks = if cfg.overlay.result_mode == "image_replace" && !ocr_result.lines.is_empty()
+    {
+        build_image_replacement_blocks(&cfg, &settings, &png, &ocr_result.lines)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let translated = if !image_blocks.is_empty() {
+        image_blocks
+            .iter()
+            .map(|block| block.translated_text.trim())
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    } else {
+        translate_preserving_lines(&cfg, &settings, &raw_text)
+            .await
+            .unwrap_or_else(|_| format!("翻译没有成功，请稍后再试。\n\n原文：\n{raw_text}"))
+    };
+    show_overlay(
+        &app,
+        &cfg,
+        payload.anchor,
+        raw_text,
+        translated,
+        Some(capture_rect),
+        Some(&png),
+        image_blocks,
+    )?;
     app.emit("ocr-status", "完成")?;
     Ok(())
 }
@@ -1008,7 +1054,16 @@ fn show_user_message(
 ) -> anyhow::Result<()> {
     cleanup_selection_layers(app);
     let _ = app.emit("ocr-status", message);
-    show_overlay(app, cfg, anchor, String::new(), message.to_string())
+    show_overlay(
+        app,
+        cfg,
+        anchor,
+        String::new(),
+        message.to_string(),
+        None,
+        None,
+        Vec::new(),
+    )
 }
 
 async fn translate_preserving_lines(
@@ -1046,6 +1101,375 @@ async fn translate_preserving_lines(
         translated.push(text.trim().to_string());
     }
     Ok(translated.join("\n\n"))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FloatRect {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+impl FloatRect {
+    fn right(self) -> f32 {
+        self.x + self.width
+    }
+
+    fn bottom(self) -> f32 {
+        self.y + self.height
+    }
+
+    fn union(self, other: Self) -> Self {
+        let x1 = self.x.min(other.x);
+        let y1 = self.y.min(other.y);
+        let x2 = self.right().max(other.right());
+        let y2 = self.bottom().max(other.bottom());
+        Self {
+            x: x1,
+            y: y1,
+            width: x2 - x1,
+            height: y2 - y1,
+        }
+    }
+
+    fn padded(self, px: f32, py: f32, image_width: u32, image_height: u32) -> Self {
+        let x1 = (self.x - px).max(0.0);
+        let y1 = (self.y - py).max(0.0);
+        let x2 = (self.right() + px).min(image_width as f32);
+        let y2 = (self.bottom() + py).min(image_height as f32);
+        Self {
+            x: x1,
+            y: y1,
+            width: (x2 - x1).max(1.0),
+            height: (y2 - y1).max(1.0),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct VisualTextLine {
+    text: String,
+    rect: FloatRect,
+    background: [u8; 3],
+    foreground: [u8; 3],
+}
+
+#[derive(Debug, Clone)]
+struct VisualTextGroup {
+    text: String,
+    rect: FloatRect,
+    line_count: usize,
+}
+
+async fn build_image_replacement_blocks(
+    cfg: &AppConfig,
+    settings: &std::collections::HashMap<String, String>,
+    png: &[u8],
+    lines: &[OcrTextLine],
+) -> anyhow::Result<Vec<ImageReplacementBlock>> {
+    let image = image::load_from_memory(png)?.to_rgba8();
+    let (image_width, image_height) = image.dimensions();
+    let groups = group_ocr_lines(&image, lines, image_width, image_height);
+    let mut blocks = Vec::with_capacity(groups.len());
+
+    for group in groups {
+        let translated = translate_preserving_lines(cfg, settings, &group.text)
+            .await
+            .unwrap_or_else(|_| group.text.clone());
+        let (background, color) = sample_replacement_colors(&image, group.rect);
+        let base_font =
+            estimate_source_font_size(group.rect, group.line_count, cfg.overlay.font_size);
+        let font_size = fit_replacement_font_size(&translated, group.rect, base_font);
+        let align = if is_centered_title(group.rect, image_width, image_height, group.line_count) {
+            "center"
+        } else {
+            "left"
+        };
+
+        blocks.push(ImageReplacementBlock {
+            source_text: group.text,
+            translated_text: translated.trim().to_string(),
+            x: group.rect.x,
+            y: group.rect.y,
+            width: group.rect.width,
+            height: group.rect.height,
+            font_size,
+            background,
+            color,
+            align: align.to_string(),
+        });
+    }
+
+    Ok(blocks)
+}
+
+fn group_ocr_lines(
+    image: &RgbaImage,
+    lines: &[OcrTextLine],
+    image_width: u32,
+    image_height: u32,
+) -> Vec<VisualTextGroup> {
+    let mut visual_lines = lines
+        .iter()
+        .filter_map(|line| {
+            let text = line.text.trim();
+            if text.is_empty() {
+                return None;
+            }
+            ocr_bbox_to_rect(&line.bbox, image_width, image_height).map(|rect| {
+                let (background, foreground) = sample_replacement_rgb(image, rect);
+                VisualTextLine {
+                    text: text.to_string(),
+                    rect,
+                    background,
+                    foreground,
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    visual_lines.sort_by(|a, b| {
+        a.rect
+            .y
+            .partial_cmp(&b.rect.y)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                a.rect
+                    .x
+                    .partial_cmp(&b.rect.x)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+    if visual_lines.is_empty() {
+        return Vec::new();
+    }
+
+    let mut heights = visual_lines
+        .iter()
+        .map(|line| line.rect.height.max(1.0))
+        .collect::<Vec<_>>();
+    heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_height = heights[heights.len() / 2].max(12.0);
+    let gap_threshold = (median_height * 0.78).max(12.0);
+    let x_threshold = (median_height * 2.5).max(28.0);
+
+    let mut groups: Vec<Vec<VisualTextLine>> = Vec::new();
+    let mut current = Vec::new();
+    for line in visual_lines {
+        let should_split = current
+            .last()
+            .map(|previous: &VisualTextLine| {
+                let vertical_gap = line.rect.y - previous.rect.bottom();
+                let overlaps_previous_row =
+                    line.rect.y < previous.rect.bottom() - median_height * 0.35;
+                vertical_gap > gap_threshold
+                    || overlaps_previous_row
+                    || (line.rect.x - previous.rect.x).abs() > x_threshold
+                    || !similar_line_style(previous, &line)
+            })
+            .unwrap_or(false);
+        if should_split {
+            groups.push(std::mem::take(&mut current));
+        }
+        current.push(line);
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+
+    groups
+        .into_iter()
+        .filter_map(|group| {
+            let mut iter = group.into_iter();
+            let first = iter.next()?;
+            let mut rect = first.rect;
+            let mut texts = vec![first.text];
+            let mut line_count = 1usize;
+            for line in iter {
+                rect = rect.union(line.rect);
+                texts.push(line.text);
+                line_count += 1;
+            }
+            let mut rect = rect.padded(3.0, 2.0, image_width, image_height);
+            if line_count > 1 {
+                let right_padding = 24.0;
+                rect.width = rect
+                    .width
+                    .max((image_width as f32 - rect.x - right_padding).max(rect.width))
+                    .min(image_width as f32 - rect.x);
+            }
+            Some(VisualTextGroup {
+                text: texts.join("\n"),
+                rect,
+                line_count,
+            })
+        })
+        .collect()
+}
+
+fn similar_line_style(a: &VisualTextLine, b: &VisualTextLine) -> bool {
+    let height_ratio = a.rect.height.min(b.rect.height) / a.rect.height.max(b.rect.height).max(1.0);
+    height_ratio > 0.72
+        && color_distance(a.foreground, b.foreground) < 72.0
+        && color_distance(a.background, b.background) < 48.0
+}
+
+fn color_distance(a: [u8; 3], b: [u8; 3]) -> f32 {
+    let dr = f32::from(a[0]) - f32::from(b[0]);
+    let dg = f32::from(a[1]) - f32::from(b[1]);
+    let db = f32::from(a[2]) - f32::from(b[2]);
+    (dr * dr + dg * dg + db * db).sqrt()
+}
+
+fn ocr_bbox_to_rect(bbox: &[f32; 8], image_width: u32, image_height: u32) -> Option<FloatRect> {
+    let xs = [bbox[0], bbox[2], bbox[4], bbox[6]];
+    let ys = [bbox[1], bbox[3], bbox[5], bbox[7]];
+    let x1 = xs.iter().copied().fold(f32::INFINITY, f32::min).max(0.0);
+    let y1 = ys.iter().copied().fold(f32::INFINITY, f32::min).max(0.0);
+    let x2 = xs
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max)
+        .min(image_width as f32);
+    let y2 = ys
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max)
+        .min(image_height as f32);
+    let width = x2 - x1;
+    let height = y2 - y1;
+    (width >= 2.0 && height >= 2.0).then_some(FloatRect {
+        x: x1,
+        y: y1,
+        width,
+        height,
+    })
+}
+
+fn sample_replacement_colors(image: &RgbaImage, rect: FloatRect) -> (String, String) {
+    let (background, foreground) = sample_replacement_rgb(image, rect);
+    (rgb_hex(background), rgb_hex(foreground))
+}
+
+fn sample_replacement_rgb(image: &RgbaImage, rect: FloatRect) -> ([u8; 3], [u8; 3]) {
+    let x1 = rect.x.floor().max(0.0) as u32;
+    let y1 = rect.y.floor().max(0.0) as u32;
+    let x2 = rect.right().ceil().min(image.width() as f32) as u32;
+    let y2 = rect.bottom().ceil().min(image.height() as f32) as u32;
+    let mut pixels = Vec::new();
+    for y in y1..y2 {
+        for x in x1..x2 {
+            let p = image.get_pixel(x, y);
+            if p[3] > 16 {
+                pixels.push([p[0], p[1], p[2]]);
+            }
+        }
+    }
+    if pixels.is_empty() {
+        return ([5, 5, 5], [244, 240, 232]);
+    }
+    let background = median_color(&pixels);
+    let bg_luma = luma(background);
+    let mut text_pixels = pixels
+        .iter()
+        .copied()
+        .filter(|rgb| {
+            let delta = (luma(*rgb) - bg_luma).abs();
+            delta > 42.0
+                && if bg_luma < 128.0 {
+                    luma(*rgb) > bg_luma
+                } else {
+                    luma(*rgb) < bg_luma
+                }
+        })
+        .collect::<Vec<_>>();
+    if text_pixels.len() < 6 {
+        text_pixels = if bg_luma < 128.0 {
+            pixels
+                .iter()
+                .copied()
+                .filter(|rgb| luma(*rgb) > 120.0)
+                .collect()
+        } else {
+            pixels
+                .iter()
+                .copied()
+                .filter(|rgb| luma(*rgb) < 150.0)
+                .collect()
+        };
+    }
+    let foreground = if text_pixels.is_empty() {
+        if bg_luma < 128.0 {
+            [242, 238, 228]
+        } else {
+            [30, 34, 42]
+        }
+    } else {
+        median_color(&text_pixels)
+    };
+    (background, foreground)
+}
+
+fn median_color(pixels: &[[u8; 3]]) -> [u8; 3] {
+    let mut r = pixels.iter().map(|p| p[0]).collect::<Vec<_>>();
+    let mut g = pixels.iter().map(|p| p[1]).collect::<Vec<_>>();
+    let mut b = pixels.iter().map(|p| p[2]).collect::<Vec<_>>();
+    r.sort_unstable();
+    g.sort_unstable();
+    b.sort_unstable();
+    let mid = pixels.len() / 2;
+    [r[mid], g[mid], b[mid]]
+}
+
+fn luma(rgb: [u8; 3]) -> f32 {
+    0.299 * f32::from(rgb[0]) + 0.587 * f32::from(rgb[1]) + 0.114 * f32::from(rgb[2])
+}
+
+fn rgb_hex(rgb: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])
+}
+
+fn estimate_source_font_size(rect: FloatRect, line_count: usize, configured_font_size: u32) -> u32 {
+    let line_height = rect.height / line_count.max(1) as f32;
+    let estimated = (line_height * 0.78).round() as u32;
+    estimated.clamp(9, configured_font_size.clamp(12, 32).max(18))
+}
+
+fn fit_replacement_font_size(text: &str, rect: FloatRect, base_font_size: u32) -> u32 {
+    let max_font = base_font_size.clamp(9, 32);
+    for font_size in (9..=max_font).rev() {
+        if replacement_text_fits(text, rect, font_size) {
+            return font_size;
+        }
+    }
+    9
+}
+
+fn replacement_text_fits(text: &str, rect: FloatRect, font_size: u32) -> bool {
+    let char_width = (font_size as f32 * 0.92).max(1.0);
+    let chars_per_row = (rect.width / char_width).floor().max(1.0) as usize;
+    let rows = text
+        .lines()
+        .map(|line| {
+            let count = line.chars().count().max(1);
+            (count + chars_per_row - 1) / chars_per_row
+        })
+        .sum::<usize>()
+        .max(1);
+    rows as f32 * font_size as f32 * 1.28 <= rect.height.max(font_size as f32)
+}
+
+fn is_centered_title(
+    rect: FloatRect,
+    image_width: u32,
+    image_height: u32,
+    line_count: usize,
+) -> bool {
+    if line_count != 1 || rect.y > image_height as f32 * 0.18 {
+        return false;
+    }
+    let center = rect.x + rect.width / 2.0;
+    (center - image_width as f32 / 2.0).abs() < image_width as f32 * 0.18
 }
 
 fn ocr_translation_blocks(raw_text: &str) -> Vec<String> {
@@ -1120,6 +1544,9 @@ fn show_overlay(
     anchor: Point,
     raw_text: String,
     text: String,
+    image_rect: Option<Rect>,
+    source_image_png: Option<&[u8]>,
+    image_blocks: Vec<ImageReplacementBlock>,
 ) -> anyhow::Result<()> {
     cleanup_selection_layers(app);
     let display_raw_text = ocr_display_text(&raw_text);
@@ -1129,13 +1556,43 @@ fn show_overlay(
     } else {
         text.clone()
     };
+    let result_mode = if cfg.overlay.result_mode == "image_replace"
+        && image_rect.is_some()
+        && source_image_png.is_some()
+        && !image_blocks.is_empty()
+    {
+        "image_replace"
+    } else {
+        "text_overlay"
+    };
+    let source_image_data_url = if result_mode == "image_replace" {
+        source_image_png.map(|png| {
+            format!(
+                "data:image/png;base64,{}",
+                general_purpose::STANDARD.encode(png)
+            )
+        })
+    } else {
+        None
+    };
+    let image_rect = image_rect.map(|rect| rect.normalized());
     let metrics = estimate_overlay_size(&display_text, cfg.overlay.width, cfg.overlay.font_size);
-    let width = metrics.0;
-    let height = metrics.1;
+    let (width, height) = if result_mode == "image_replace" {
+        let rect = image_rect.expect("image_replace requires image_rect");
+        (rect.width.max(80) as u32, rect.height.max(36) as u32)
+    } else {
+        metrics
+    };
     let mut max_height = cfg.overlay.max_height;
 
-    let mut x = anchor.x + cfg.overlay.offset_x;
-    let mut y = anchor.y + cfg.overlay.offset_y;
+    let mut x = image_rect
+        .filter(|_| result_mode == "image_replace")
+        .map(|rect| rect.x)
+        .unwrap_or(anchor.x + cfg.overlay.offset_x);
+    let mut y = image_rect
+        .filter(|_| result_mode == "image_replace")
+        .map(|rect| rect.y)
+        .unwrap_or(anchor.y + cfg.overlay.offset_y);
     if let Some(monitor) = app.primary_monitor()? {
         let pos = monitor.position();
         let size = monitor.size();
@@ -1171,9 +1628,18 @@ fn show_overlay(
             .build()?
     };
     let payload = OverlayPayload {
+        result_mode: result_mode.to_string(),
         text,
         raw_text: display_raw_text,
         width,
+        image_width: width,
+        image_height: height,
+        source_image_data_url,
+        image_blocks: if result_mode == "image_replace" {
+            image_blocks
+        } else {
+            Vec::new()
+        },
         opacity: cfg.overlay.opacity,
         font_size: cfg.overlay.font_size,
         max_height,
@@ -1189,8 +1655,19 @@ fn show_overlay(
         }
     }
     window.set_size(PhysicalSize::new(width, height))?;
-    let min_height = if has_source { 118 } else { 54 };
-    let _ = window.set_min_size(Some(PhysicalSize::new(180, min_height)));
+    let min_height = if result_mode == "image_replace" {
+        height.max(36)
+    } else if has_source {
+        118
+    } else {
+        54
+    };
+    let min_width = if result_mode == "image_replace" {
+        width.max(80)
+    } else {
+        180
+    };
+    let _ = window.set_min_size(Some(PhysicalSize::new(min_width, min_height)));
     window.set_position(PhysicalPosition::new(x, y))?;
     let _ = window.set_focusable(true);
     let _ = window.set_skip_taskbar(true);
@@ -1216,6 +1693,7 @@ fn refresh_overlay_settings(app: &tauri::AppHandle, cfg: &AppConfig) {
     let Some(payload) = guard.as_mut() else {
         return;
     };
+    payload.result_mode = cfg.overlay.result_mode.clone();
     payload.opacity = cfg.overlay.opacity;
     payload.font_size = cfg.overlay.font_size;
     payload.max_height = cfg.overlay.max_height;

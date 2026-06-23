@@ -16,6 +16,8 @@ use windows::{
     Storage::Streams::{DataWriter, InMemoryRandomAccessStream},
 };
 
+use crate::pipeline::OcrTextLine;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcrLanguageInfo {
     pub tag: String,
@@ -464,13 +466,13 @@ fn preprocess_windows_ocr_image(
     Ok(out.into_inner())
 }
 
-pub async fn recognize_png_snippingtool_oneocr(png: &[u8]) -> Result<String> {
+pub async fn recognize_png_snippingtool_oneocr(png: &[u8]) -> Result<(String, Vec<OcrTextLine>)> {
     let variants = oneocr_image_variants(png).unwrap_or_else(|_| vec![png.to_vec()]);
     tokio::task::spawn_blocking(move || {
         let mut last_error = None;
         for variant in variants {
             match recognize_png_snippingtool_oneocr_blocking(&variant) {
-                Ok(text) if !text.trim().is_empty() => return Ok(text),
+                Ok((text, lines)) if !text.trim().is_empty() => return Ok((text, lines)),
                 Ok(_) => last_error = Some(anyhow!("未识别到文本")),
                 Err(err) => last_error = Some(err),
             }
@@ -539,6 +541,19 @@ struct OneOcrImage {
     data_ptr: i64,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct OcrLineBoundingBox {
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    x3: f32,
+    y3: f32,
+    x4: f32,
+    y4: f32,
+}
+
 type CreateOcrInitOptions = unsafe extern "C" fn(*mut i64) -> i64;
 type CreateOcrProcessOptions = unsafe extern "C" fn(*mut i64) -> i64;
 type CreateOcrPipeline = unsafe extern "C" fn(*const c_char, *const c_char, i64, *mut i64) -> i64;
@@ -548,9 +563,10 @@ type RunOcrPipeline = unsafe extern "C" fn(i64, *mut OneOcrImage, i64, *mut i64)
 type GetOcrLineCount = unsafe extern "C" fn(i64, *mut i64) -> i64;
 type GetOcrLine = unsafe extern "C" fn(i64, i64, *mut i64) -> i64;
 type GetOcrLineContent = unsafe extern "C" fn(i64, *mut i64) -> i64;
+type GetOcrLineBoundingBox = unsafe extern "C" fn(i64, *mut *const OcrLineBoundingBox) -> i64;
 type ReleaseOcrResult = unsafe extern "C" fn(i64);
 
-fn recognize_png_snippingtool_oneocr_blocking(png: &[u8]) -> Result<String> {
+fn recognize_png_snippingtool_oneocr_blocking(png: &[u8]) -> Result<(String, Vec<OcrTextLine>)> {
     let runtime_dir = find_snippingtool_oneocr().ok_or_else(|| {
         anyhow!("未安装 SnippingTool OneOCR 运行库，请先点击“安装 OneOCR 运行库”")
     })?;
@@ -590,6 +606,8 @@ fn recognize_png_snippingtool_oneocr_blocking(png: &[u8]) -> Result<String> {
         let get_line: libloading::Symbol<GetOcrLine> = oneocr.get(b"GetOcrLine")?;
         let get_line_content: libloading::Symbol<GetOcrLineContent> =
             oneocr.get(b"GetOcrLineContent")?;
+        let get_line_bounding_box: libloading::Symbol<GetOcrLineBoundingBox> =
+            oneocr.get(b"GetOcrLineBoundingBox")?;
         let release_result: libloading::Symbol<ReleaseOcrResult> =
             oneocr.get(b"ReleaseOcrResult")?;
 
@@ -641,6 +659,7 @@ fn recognize_png_snippingtool_oneocr_blocking(png: &[u8]) -> Result<String> {
         let mut line_count = 0i64;
         ensure_oneocr_ok(get_line_count(result, &mut line_count), "GetOcrLineCount")?;
         let mut lines = Vec::new();
+        let mut structured_lines = Vec::new();
         for index in 0..line_count {
             let mut line = 0i64;
             ensure_oneocr_ok(get_line(result, index, &mut line), "GetOcrLine")?;
@@ -660,6 +679,20 @@ fn recognize_png_snippingtool_oneocr_blocking(png: &[u8]) -> Result<String> {
                 .trim()
                 .to_string();
             if !text.is_empty() {
+                let mut bbox_ptr: *const OcrLineBoundingBox = std::ptr::null();
+                ensure_oneocr_ok(
+                    get_line_bounding_box(line, &mut bbox_ptr),
+                    "GetOcrLineBoundingBox",
+                )?;
+                if !bbox_ptr.is_null() {
+                    let bbox = *bbox_ptr;
+                    structured_lines.push(OcrTextLine {
+                        text: text.clone(),
+                        bbox: [
+                            bbox.x1, bbox.y1, bbox.x2, bbox.y2, bbox.x3, bbox.y3, bbox.x4, bbox.y4,
+                        ],
+                    });
+                }
                 lines.push(text);
             }
         }
@@ -669,7 +702,7 @@ fn recognize_png_snippingtool_oneocr_blocking(png: &[u8]) -> Result<String> {
         if text.is_empty() {
             bail!("未识别到文本");
         }
-        Ok(text)
+        Ok((text, structured_lines))
     }
 }
 

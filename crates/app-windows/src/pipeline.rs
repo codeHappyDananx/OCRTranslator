@@ -5,6 +5,12 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OcrTextLine {
+    pub text: String,
+    pub bbox: [f32; 8],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcrPipelineRequest {
     pub engine: String,
     pub source_lang: String,
@@ -15,6 +21,7 @@ pub struct OcrPipelineRequest {
 pub struct OcrPipelineResult {
     pub engine: String,
     pub text: String,
+    pub lines: Vec<OcrTextLine>,
     pub preprocessed_png: Option<Vec<u8>>,
 }
 
@@ -42,15 +49,20 @@ pub async fn recognize_png_pipeline(
     let mut errors = Vec::new();
     for engine in attempts {
         let result = match engine {
-            "snippingtool" => recognize_png_snippingtool_oneocr(png).await,
-            "windows" => recognize_png_windows_ocr(png, &request.source_lang).await,
+            "snippingtool" => recognize_png_snippingtool_oneocr(png)
+                .await
+                .map(|(text, lines)| (text, lines)),
+            "windows" => recognize_png_windows_ocr(png, &request.source_lang)
+                .await
+                .map(|text| (text, Vec::new())),
             _ => unreachable!(),
         };
         match result {
-            Ok(text) if !text.trim().is_empty() => {
+            Ok((text, lines)) if !text.trim().is_empty() => {
                 return Ok(OcrPipelineResult {
                     engine: engine.to_string(),
                     text: text.trim().to_string(),
+                    lines,
                     preprocessed_png,
                 });
             }

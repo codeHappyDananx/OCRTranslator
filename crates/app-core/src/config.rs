@@ -27,6 +27,8 @@ pub struct AppBehaviorConfig {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OverlayConfig {
+    #[serde(default = "default_result_mode")]
+    pub result_mode: String,
     pub width: u32,
     pub offset_x: i32,
     pub offset_y: i32,
@@ -75,6 +77,7 @@ impl Default for AppBehaviorConfig {
 impl Default for OverlayConfig {
     fn default() -> Self {
         Self {
+            result_mode: default_result_mode(),
             width: 320,
             offset_x: 0,
             offset_y: 0,
@@ -94,6 +97,10 @@ impl Default for OverlayConfig {
 
 fn default_overlay_draggable() -> bool {
     true
+}
+
+fn default_result_mode() -> String {
+    "text_overlay".to_string()
 }
 
 fn default_overlay_max_height() -> u32 {
@@ -145,6 +152,7 @@ impl AppConfig {
         let missing_overlay_fields = !text.contains("\"show_source\"")
             || !text.contains("\"draggable\"")
             || !text.contains("\"max_height\"")
+            || !text.contains("\"result_mode\"")
             || !text.contains("\"source_background\"")
             || !text.contains("\"translation_background\"");
         let missing_app_fields = !text.contains("\"app\"")
@@ -174,6 +182,12 @@ impl AppConfig {
         self.ocr_engine = "snippingtool".to_string();
         if self.hotkey.trim().is_empty() {
             self.hotkey = "MouseX1".to_string();
+        }
+        if !matches!(
+            self.overlay.result_mode.as_str(),
+            "text_overlay" | "image_replace"
+        ) {
+            self.overlay.result_mode = default_result_mode();
         }
         self.overlay.width = self.overlay.width.clamp(180, 900);
         self.overlay.max_height = self.overlay.max_height.clamp(120, 1200);
