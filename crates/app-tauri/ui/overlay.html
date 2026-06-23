@@ -18,8 +18,13 @@
       body {
         position: relative;
       }
+      *,
+      *:focus,
+      *:focus-visible {
+        outline: none;
+      }
       #card {
-        width: 100vw;
+        width: var(--overlay-width, 320px);
         height: auto;
         min-height: 0;
         max-height: 620px;
@@ -64,6 +69,8 @@
         cursor: ew-resize;
         background: transparent;
         align-self: stretch;
+        touch-action: none;
+        user-select: none;
       }
       #resizeHandle::after {
         content: "";
@@ -188,12 +195,14 @@
       const translationTitle = document.querySelector("#translationTitle");
       const translationText = document.querySelector("#translationText");
       const resizeHandle = document.querySelector("#resizeHandle");
+      const card = document.querySelector("#card");
       let doubleClickClose = true;
       let draggable = true;
       let maxHeight = 620;
       let resizeFrame = 0;
       let resizeTimer = 0;
       let lastResizeRequest = { width: 0, height: 0 };
+      let baseWidth = 320;
       let manualWidth = null;
       let resizing = null;
 
@@ -219,7 +228,7 @@
       function render(payload) {
         const rawText = cleanDisplayText(payload.raw_text);
         const translatedText = cleanDisplayText(payload.text) || "无翻译结果";
-        const showSource = !!rawText;
+        const showSource = payload.show_source !== false && !!rawText;
         sourceText.textContent = showSource ? rawText : "";
         sourceBlock.classList.toggle("hidden", !showSource);
         translationBlock.classList.toggle("solo", !showSource);
@@ -234,8 +243,10 @@
           "#127858",
         );
         blocks.style.fontSize = `${payload.font_size ?? 18}px`;
-        document.querySelector("#card").style.maxHeight = `${maxHeight}px`;
+        card.style.maxHeight = `${maxHeight}px`;
         blocks.classList.remove("scrolling");
+        baseWidth = Math.max(180, Math.min(900, Number(payload.width ?? 320)));
+        card.style.width = `${baseWidth}px`;
         manualWidth = null;
         lastResizeRequest = { width: 0, height: 0 };
         doubleClickClose = payload.double_click_close !== false;
@@ -258,9 +269,10 @@
           sourceBlock.getBoundingClientRect().height +
           translationBlock.getBoundingClientRect().height;
         blocks.classList.toggle("scrolling", contentHeight > maxHeight + 1);
-        const cardRect = document.querySelector("#card").getBoundingClientRect();
-        const width = Math.ceil(manualWidth ?? window.innerWidth ?? cardRect.width ?? 180);
-        const measuredHeight = Math.max(blocks.scrollHeight, contentHeight, cardRect.height);
+        const cardRect = card.getBoundingClientRect();
+        const width = Math.ceil(manualWidth ?? baseWidth ?? cardRect.width ?? 180);
+        card.style.width = `${Math.max(width, 160)}px`;
+        const measuredHeight = Math.max(blocks.scrollHeight, contentHeight);
         const height = Math.ceil(Math.min(measuredHeight, maxHeight) + 2);
         if (
           Math.abs(lastResizeRequest.width - width) <= 1 &&
@@ -294,11 +306,19 @@
       });
 
       window.addEventListener("mousedown", async (event) => {
+        const blocksRect = blocks.getBoundingClientRect();
+        const inScrollbar =
+          event.clientX >= blocksRect.right - 12 &&
+          event.clientX <= blocksRect.right + 1 &&
+          event.clientY >= blocksRect.top &&
+          event.clientY <= blocksRect.bottom;
         if (
           !draggable ||
           event.button !== 0 ||
           event.detail > 1 ||
-          event.target === resizeHandle
+          event.target === resizeHandle ||
+          event.target.closest?.("#resizeHandle") ||
+          inScrollbar
         )
           return;
         event.preventDefault();
@@ -313,8 +333,8 @@
         resizing = {
           pointerId: event.pointerId,
           startX: event.screenX,
-          startWidth: window.innerWidth || blocks.getBoundingClientRect().width || 160,
-          pendingWidth: window.innerWidth || blocks.getBoundingClientRect().width || 160,
+          startWidth: card.getBoundingClientRect().width || baseWidth || 160,
+          pendingWidth: card.getBoundingClientRect().width || baseWidth || 160,
           frame: 0,
         };
       });
@@ -324,6 +344,7 @@
         const width = Math.max(180, Math.min(900, resizing.startWidth + event.screenX - resizing.startX));
         resizing.pendingWidth = width;
         manualWidth = width;
+        card.style.width = `${Math.round(width)}px`;
         if (resizing.frame) return;
         resizing.frame = requestAnimationFrame(async () => {
           if (!resizing) return;

@@ -47,6 +47,7 @@ struct SelectionPayload {
 struct OverlayPayload {
     text: String,
     raw_text: String,
+    width: u32,
     opacity: f32,
     font_size: u32,
     max_height: u32,
@@ -939,7 +940,7 @@ fn show_overlay(
             .transparent(true)
             .always_on_top(true)
             .focusable(false)
-            .resizable(true)
+            .resizable(false)
             .skip_taskbar(true)
             .visible(false)
             .inner_size(width as f64, height as f64)
@@ -948,6 +949,7 @@ fn show_overlay(
     let payload = OverlayPayload {
         text,
         raw_text: display_raw_text,
+        width,
         opacity: cfg.overlay.opacity,
         font_size: cfg.overlay.font_size,
         max_height,

@@ -129,7 +129,7 @@ if ($overlay -notmatch 'getBoundingClientRect\(\)' -or $overlay -notmatch 'conte
 }
 Write-Host "[PASS] overlay measures rendered content and scrolling state"
 
-if ($overlay -notmatch 'addEventListener\("resize"' -or $overlay -notmatch 'setTimeout\(scheduleResizeToContent,\s*80\)' -or $overlay -notmatch 'window\.innerWidth' -or $main -notmatch '\.resizable\(true\)') {
+if ($overlay -notmatch 'addEventListener\("resize"' -or $overlay -notmatch 'setTimeout\(scheduleResizeToContent,\s*80\)' -or $main -notmatch '\.resizable\(false\)') {
   throw "[FAIL] overlay does not reflow when manually resized"
 }
 Write-Host "[PASS] overlay reflows when manually resized"
@@ -148,6 +148,11 @@ if ($main -notmatch 'let width = default_width\.clamp\(180,\s*900\)' -or $main -
   throw "[FAIL] overlay initial width can still shrink below configured width"
 }
 Write-Host "[PASS] overlay initial width keeps configured width"
+
+if ($main -notmatch 'width,\s*[\r\n]+\s*opacity:' -or $overlay -notmatch 'payload\.width' -or $overlay -match 'Math\.max\(blocks\.scrollHeight,\s*contentHeight,\s*cardRect\.height\)' -or $overlay -match 'window\.innerWidth') {
+  throw "[FAIL] overlay still derives initial size from stale window dimensions"
+}
+Write-Host "[PASS] overlay initial size comes from payload and content"
 
 if ($main -notmatch 'ocr_translation_blocks' -or $main -notmatch 'flush_translation_paragraph' -or $main -match 'for line in lines') {
   throw "[FAIL] OCR translation still uses visual line-by-line translation"
