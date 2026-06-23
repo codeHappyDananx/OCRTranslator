@@ -11,6 +11,7 @@ $overlay = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\overlay.html
 $tauriConfig = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\tauri.conf.json") -Raw
 $manifest = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\app.exe.manifest") -Raw
 $buildScript = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\build.rs") -Raw
+$hotkey = Get-Content (Join-Path $ProjectRoot "crates\app-windows\src\hotkey.rs") -Raw
 
 $checks = @(
   @{ Name = "start hides old overlay"; Pattern = 'get_webview_window\("overlay"\)' },
@@ -27,12 +28,13 @@ $checks = @(
   @{ Name = "selection blur reset"; Pattern = 'addEventListener\("blur", resetSelection\)' },
   @{ Name = "selection hint mentions right click cancel"; Pattern = '右键或 Esc 取消' },
   @{ Name = "selection right click cancels"; Pattern = 'event\.button === 2' },
+  @{ Name = "global right click cancels selection"; Pattern = 'selection_cancel\.store\(true,\s*Ordering::SeqCst\)' },
   @{ Name = "selection blocks context menu"; Pattern = 'addEventListener\("contextmenu", cancelSelection\)' },
   @{ Name = "small left click auto detects region"; Pattern = 'selection_auto_detect' }
 )
 
 foreach ($check in $checks) {
-  $source = "$main`n$selection`n$selectionBox`n$selectionDim"
+  $source = "$main`n$selection`n$selectionBox`n$selectionDim`n$hotkey"
   if ($source -notmatch $check.Pattern) {
     throw "[FAIL] $($check.Name)"
   }
@@ -91,6 +93,11 @@ if ($selectionDim -notmatch 'background:\s*rgba\(0,\s*0,\s*0,\s*0\.22\)' -or $se
 }
 Write-Host "[PASS] OCR selection uses a click-through dim layer"
 
+if ($main -notmatch 'let overscan = 24' -or $main -notmatch 'rect\.x - overscan' -or $main -notmatch 'rect\.width \+ overscan \* 2') {
+  throw "[FAIL] OCR dim layer does not overscan the virtual screen edges"
+}
+Write-Host "[PASS] OCR dim layer overscans virtual screen edges"
+
 if ($selectionBox -notmatch '拖动选择文字' -or $selectionBox -notmatch 'selection-box-mode' -or $selectionBox -notmatch 'body\.hint') {
   throw "[FAIL] OCR selection does not show a lightweight entry hint"
 }
@@ -100,6 +107,11 @@ if ($main -notmatch 'set_ignore_cursor_events\(true\)' -or $main -notmatch 'show
   throw "[FAIL] selection box can still capture mouse input"
 }
 Write-Host "[PASS] selection box ignores mouse input"
+
+if ($hotkey -notmatch 'WM_RBUTTONDOWN' -or $hotkey -notmatch 'MouseButton::Right' -or $main -notmatch 'selection_active\.load\(Ordering::SeqCst\)') {
+  throw "[FAIL] right click is not handled by the global selection cancel path"
+}
+Write-Host "[PASS] right click is handled by the global selection cancel path"
 
 if ($main -notmatch 'capture_frozen_screen\(\)[\s\S]{0,360}show_selection_dim\(&app\)') {
   throw "[FAIL] OCR dim layer can be captured before the frozen screenshot"

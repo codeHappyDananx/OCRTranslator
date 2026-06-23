@@ -14,7 +14,10 @@ use image::{ImageFormat, RgbaImage};
 use serde::{Deserialize, Serialize};
 use std::{
     io::Cursor,
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     time::{Duration, Instant},
 };
 use tauri::{
@@ -25,6 +28,8 @@ use tokio::sync::mpsc;
 struct AppState {
     config: Mutex<AppConfig>,
     last_overlay: Mutex<Option<OverlayPayload>>,
+    selection_active: AtomicBool,
+    selection_cancel: AtomicBool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -461,6 +466,10 @@ fn start_selection_window(app: &tauri::AppHandle, _cfg: &AppConfig) -> anyhow::R
 
 fn start_mouse_selection(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
+        if let Some(state) = app.try_state::<AppState>() {
+            state.selection_active.store(true, Ordering::SeqCst);
+            state.selection_cancel.store(false, Ordering::SeqCst);
+        }
         let _ = hide_selection_box(&app);
         let _ = hide_selection_dim(&app);
         let frozen_screen = match capture_frozen_screen() {
@@ -475,19 +484,15 @@ fn start_mouse_selection(app: tauri::AppHandle) {
             let _ = show_selection_hint(&app, point);
         }
         while left_mouse_down() {
-            if right_mouse_down() {
-                let _ = hide_selection_box(&app);
-                let _ = hide_selection_dim(&app);
-                let _ = app.emit("ocr-status", "已取消");
+            if selection_cancel_requested(&app) || right_mouse_down() {
+                finish_selection_cancel(&app);
                 return;
             }
             tokio::time::sleep(Duration::from_millis(16)).await;
         }
         loop {
-            if right_mouse_down() {
-                let _ = app.emit("ocr-status", "已取消");
-                let _ = hide_selection_box(&app);
-                let _ = hide_selection_dim(&app);
+            if selection_cancel_requested(&app) || right_mouse_down() {
+                finish_selection_cancel(&app);
                 return;
             }
             if left_mouse_down() {
@@ -499,6 +504,7 @@ fn start_mouse_selection(app: tauri::AppHandle) {
             Ok(point) => point,
             Err(err) => {
                 let _ = app.emit("ocr-status", format!("无法读取鼠标位置：{err}"));
+                finish_selection_cancel(&app);
                 return;
             }
         };
@@ -510,10 +516,8 @@ fn start_mouse_selection(app: tauri::AppHandle) {
             height: 1,
         };
         while left_mouse_down() {
-            if right_mouse_down() {
-                let _ = hide_selection_box(&app);
-                let _ = hide_selection_dim(&app);
-                let _ = app.emit("ocr-status", "已取消");
+            if selection_cancel_requested(&app) || right_mouse_down() {
+                finish_selection_cancel(&app);
                 return;
             }
             if let Ok(current) = cursor_position() {
@@ -531,6 +535,7 @@ fn start_mouse_selection(app: tauri::AppHandle) {
         });
         let _ = hide_selection_box(&app);
         let _ = hide_selection_dim(&app);
+        finish_selection_state(&app);
         let rect = rect_from_points(start, end);
         let cfg = match app.state::<AppState>().config.lock().map(|cfg| cfg.clone()) {
             Ok(cfg) => cfg,
@@ -565,6 +570,26 @@ fn start_mouse_selection(app: tauri::AppHandle) {
         )
         .await;
     });
+}
+
+fn selection_cancel_requested(app: &tauri::AppHandle) -> bool {
+    app.try_state::<AppState>()
+        .map(|state| state.selection_cancel.load(Ordering::SeqCst))
+        .unwrap_or(false)
+}
+
+fn finish_selection_state(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        state.selection_active.store(false, Ordering::SeqCst);
+        state.selection_cancel.store(false, Ordering::SeqCst);
+    }
+}
+
+fn finish_selection_cancel(app: &tauri::AppHandle) {
+    let _ = hide_selection_box(app);
+    let _ = hide_selection_dim(app);
+    finish_selection_state(app);
+    let _ = app.emit("ocr-status", "已取消");
 }
 
 fn capture_frozen_screen() -> anyhow::Result<FrozenScreen> {
@@ -659,10 +684,11 @@ fn get_or_create_selection_dim(app: &tauri::AppHandle) -> anyhow::Result<tauri::
 fn show_selection_dim(app: &tauri::AppHandle) -> anyhow::Result<()> {
     let window = get_or_create_selection_dim(app)?;
     let rect = virtual_screen_rect();
-    window.set_position(PhysicalPosition::new(rect.x, rect.y))?;
+    let overscan = 24;
+    window.set_position(PhysicalPosition::new(rect.x - overscan, rect.y - overscan))?;
     window.set_size(PhysicalSize::new(
-        rect.width.max(1) as u32,
-        rect.height.max(1) as u32,
+        (rect.width + overscan * 2).max(1) as u32,
+        (rect.height + overscan * 2).max(1) as u32,
     ))?;
     window.show()?;
     Ok(())
@@ -1334,6 +1360,10 @@ fn input_matches_hotkey(hotkey: &str, event: &GlobalInputEvent) -> bool {
 
     match event {
         GlobalInputEvent::Mouse(mouse) => match mouse.button {
+            MouseButton::Right => {
+                hotkey.eq_ignore_ascii_case("MouseRight")
+                    || hotkey.eq_ignore_ascii_case("RightButton")
+            }
             MouseButton::X1 => {
                 hotkey.eq_ignore_ascii_case("MouseX1") || hotkey.eq_ignore_ascii_case("XButton1")
             }
@@ -1410,6 +1440,8 @@ fn main() {
         .manage(AppState {
             config: Mutex::new(config),
             last_overlay: Mutex::new(None),
+            selection_active: AtomicBool::new(false),
+            selection_cancel: AtomicBool::new(false),
         })
         .setup(|app| {
             if let Ok(resource_dir) = app.path().resource_dir() {
@@ -1435,6 +1467,17 @@ fn main() {
                 let mut last_trigger = Instant::now() - Duration::from_secs(10);
                 while let Some(event) = rx.recv().await {
                     let state = handle.state::<AppState>();
+                    if matches!(
+                        event,
+                        GlobalInputEvent::Mouse(app_windows::MouseEvent {
+                            button: MouseButton::Right,
+                            ..
+                        })
+                    ) && state.selection_active.load(Ordering::SeqCst)
+                    {
+                        state.selection_cancel.store(true, Ordering::SeqCst);
+                        continue;
+                    }
                     let cfg = state.config.lock().map(|cfg| cfg.clone());
                     let Ok(cfg) = cfg else {
                         continue;

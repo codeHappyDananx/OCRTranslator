@@ -15,7 +15,8 @@ use windows::{
             WindowsAndMessaging::{
                 CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
                 UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL,
-                WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN, WM_SYSKEYDOWN, WM_XBUTTONDOWN,
+                WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN,
+                WM_XBUTTONDOWN,
             },
         },
     },
@@ -24,6 +25,7 @@ use windows::{
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MouseButton {
     Left,
+    Right,
     X1,
     X2,
 }
@@ -122,6 +124,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
         let info = *(lparam.0 as *const MSLLHOOKSTRUCT);
         let button = match wparam.0 as u32 {
             WM_LBUTTONDOWN => Some(MouseButton::Left),
+            WM_RBUTTONDOWN => Some(MouseButton::Right),
             WM_XBUTTONDOWN => {
                 let xbutton = ((info.mouseData >> 16) & 0xffff) as u16;
                 if xbutton == 1 {
