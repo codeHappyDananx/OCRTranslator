@@ -24,6 +24,7 @@
         outline: none;
       }
       #card {
+        position: relative;
         width: var(--overlay-width, 320px);
         height: auto;
         min-height: 0;
@@ -63,14 +64,15 @@
         scrollbar-color: rgba(255, 255, 255, 0.42) rgba(0, 0, 0, 0.08);
       }
       #resizeHandle {
-        flex: 0 0 6px;
-        width: 6px;
-        min-width: 6px;
+        flex: 0 0 16px;
+        width: 16px;
+        min-width: 16px;
         cursor: ew-resize;
         background: transparent;
         align-self: stretch;
         touch-action: none;
         user-select: none;
+        z-index: 2;
       }
       #resizeHandle::after {
         content: "";
@@ -78,7 +80,7 @@
         width: 2px;
         height: calc(100% - 20px);
         min-height: 28px;
-        margin: 10px 2px;
+        margin: 10px 7px;
         border-radius: 999px;
         background: rgba(255, 255, 255, 0);
         transition: background 120ms ease;
@@ -86,6 +88,32 @@
       #resizeHandle:hover::after,
       #resizeHandle.resizing::after {
         background: rgba(255, 255, 255, 0.36);
+      }
+      #cornerResizeHandle {
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        width: 18px;
+        height: 18px;
+        cursor: nwse-resize;
+        touch-action: none;
+        user-select: none;
+        z-index: 3;
+      }
+      #cornerResizeHandle::after {
+        content: "";
+        position: absolute;
+        right: 5px;
+        bottom: 5px;
+        width: 7px;
+        height: 7px;
+        border-right: 2px solid rgba(255, 255, 255, 0);
+        border-bottom: 2px solid rgba(255, 255, 255, 0);
+        transition: border-color 120ms ease;
+      }
+      #cornerResizeHandle:hover::after,
+      #cornerResizeHandle.resizing::after {
+        border-color: rgba(255, 255, 255, 0.42);
       }
       #blocks::-webkit-scrollbar {
         width: 8px;
@@ -184,6 +212,7 @@
         </div>
       </div>
       <div id="resizeHandle" title="拖动调整宽度"></div>
+      <div id="cornerResizeHandle" title="拖动调整宽度和高度"></div>
     </div>
     <script>
       const invoke = (...args) => window.__TAURI__.core.invoke(...args);
@@ -195,6 +224,7 @@
       const translationTitle = document.querySelector("#translationTitle");
       const translationText = document.querySelector("#translationText");
       const resizeHandle = document.querySelector("#resizeHandle");
+      const cornerResizeHandle = document.querySelector("#cornerResizeHandle");
       const card = document.querySelector("#card");
       let doubleClickClose = true;
       let draggable = true;
@@ -204,6 +234,7 @@
       let lastResizeRequest = { width: 0, height: 0 };
       let baseWidth = 320;
       let manualWidth = null;
+      let manualHeight = null;
       let resizing = null;
 
       function cleanDisplayText(value) {
@@ -247,7 +278,10 @@
         blocks.classList.remove("scrolling");
         baseWidth = Math.max(180, Math.min(900, Number(payload.width ?? 320)));
         card.style.width = `${baseWidth}px`;
+        card.style.height = "auto";
+        blocks.style.height = "auto";
         manualWidth = null;
+        manualHeight = null;
         lastResizeRequest = { width: 0, height: 0 };
         doubleClickClose = payload.double_click_close !== false;
         draggable = payload.draggable !== false;
@@ -273,7 +307,11 @@
         const width = Math.ceil(manualWidth ?? baseWidth ?? cardRect.width ?? 180);
         card.style.width = `${Math.max(width, 160)}px`;
         const measuredHeight = Math.max(blocks.scrollHeight, contentHeight);
-        const height = Math.ceil(Math.min(measuredHeight, maxHeight) + 2);
+        const height = Math.ceil(manualHeight ?? Math.min(measuredHeight, maxHeight) + 2);
+        if (manualHeight !== null) {
+          card.style.height = `${height}px`;
+          blocks.style.height = `${height}px`;
+        }
         if (
           Math.abs(lastResizeRequest.width - width) <= 1 &&
           Math.abs(lastResizeRequest.height - height) <= 1
@@ -318,6 +356,8 @@
           event.detail > 1 ||
           event.target === resizeHandle ||
           event.target.closest?.("#resizeHandle") ||
+          event.target === cornerResizeHandle ||
+          event.target.closest?.("#cornerResizeHandle") ||
           inScrollbar
         )
           return;
@@ -335,6 +375,9 @@
           startX: event.screenX,
           startWidth: card.getBoundingClientRect().width || baseWidth || 160,
           pendingWidth: card.getBoundingClientRect().width || baseWidth || 160,
+          startHeight: card.getBoundingClientRect().height || blocks.getBoundingClientRect().height || 54,
+          pendingHeight: card.getBoundingClientRect().height || blocks.getBoundingClientRect().height || 54,
+          mode: "width",
           frame: 0,
         };
       });
@@ -363,12 +406,64 @@
           cancelAnimationFrame(resizing.frame);
         }
         manualWidth = Math.max(180, Math.min(900, resizing.pendingWidth));
+        if (resizing.mode === "corner") {
+          manualHeight = Math.max(54, Math.min(maxHeight, resizing.pendingHeight));
+        }
         resizing = null;
         resizeHandle.classList.remove("resizing");
+        cornerResizeHandle.classList.remove("resizing");
         scheduleResizeToContent();
       }
       resizeHandle.addEventListener("pointerup", stopResize);
       resizeHandle.addEventListener("pointercancel", stopResize);
+      cornerResizeHandle.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        cornerResizeHandle.setPointerCapture(event.pointerId);
+        cornerResizeHandle.classList.add("resizing");
+        const rect = card.getBoundingClientRect();
+        resizing = {
+          pointerId: event.pointerId,
+          startX: event.screenX,
+          startY: event.screenY,
+          startWidth: rect.width || baseWidth || 160,
+          startHeight: rect.height || blocks.getBoundingClientRect().height || 54,
+          pendingWidth: rect.width || baseWidth || 160,
+          pendingHeight: rect.height || blocks.getBoundingClientRect().height || 54,
+          mode: "corner",
+          frame: 0,
+        };
+      });
+      cornerResizeHandle.addEventListener("pointermove", (event) => {
+        if (!resizing || resizing.pointerId !== event.pointerId || resizing.mode !== "corner") return;
+        event.preventDefault();
+        const width = Math.max(180, Math.min(900, resizing.startWidth + event.screenX - resizing.startX));
+        const height = Math.max(54, Math.min(maxHeight, resizing.startHeight + event.screenY - resizing.startY));
+        resizing.pendingWidth = width;
+        resizing.pendingHeight = height;
+        manualWidth = width;
+        manualHeight = height;
+        card.style.width = `${Math.round(width)}px`;
+        card.style.height = `${Math.round(height)}px`;
+        blocks.style.height = `${Math.round(height)}px`;
+        blocks.classList.toggle("scrolling", blocks.scrollHeight > height + 1);
+        if (resizing.frame) return;
+        resizing.frame = requestAnimationFrame(async () => {
+          if (!resizing) return;
+          const requestWidth = Math.round(resizing.pendingWidth);
+          const requestHeight = Math.round(resizing.pendingHeight);
+          resizing.frame = 0;
+          await invoke("resize_overlay_manual", {
+            request: {
+              width: requestWidth,
+              height: requestHeight,
+            },
+          }).catch(() => {});
+        });
+      });
+      cornerResizeHandle.addEventListener("pointerup", stopResize);
+      cornerResizeHandle.addEventListener("pointercancel", stopResize);
       window.addEventListener("resize", () => {
         if (resizing) return;
         clearTimeout(resizeTimer);

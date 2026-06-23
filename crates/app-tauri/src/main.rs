@@ -69,6 +69,12 @@ struct OverlayWidthRequest {
     width: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OverlayManualResizeRequest {
+    width: u32,
+    height: u32,
+}
+
 #[tauri::command]
 fn get_config(state: State<'_, AppState>) -> Result<AppConfig, String> {
     state
@@ -367,6 +373,55 @@ fn resize_overlay_width(request: OverlayWidthRequest, app: tauri::AppHandle) -> 
     let width = request.width.clamp(180, 900);
     window
         .set_size(PhysicalSize::new(width, size.height.max(54)))
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn resize_overlay_manual(
+    request: OverlayManualResizeRequest,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let cfg = state
+        .config
+        .lock()
+        .map_err(|e| format!("读取配置锁失败：{e}"))?
+        .clone();
+    let Some(window) = app.get_webview_window("overlay") else {
+        return Ok(());
+    };
+    let current = window.outer_position().map_err(|e| e.to_string())?;
+    let mut width = request.width.clamp(180, 900);
+    let mut height = request.height.max(54);
+    let mut x = current.x;
+    let mut y = current.y;
+
+    if let Some(monitor) = app.primary_monitor().map_err(|e| e.to_string())? {
+        let pos = monitor.position();
+        let size = monitor.size();
+        let margin = cfg.overlay.screen_margin;
+        let left = pos.x + margin;
+        let top = pos.y + margin;
+        let right = pos.x + size.width as i32 - margin;
+        let bottom = pos.y + size.height as i32 - margin;
+        width = width.min((right - left).max(180) as u32);
+        height = height.min((bottom - top).max(54) as u32);
+        if x + width as i32 > right {
+            x = (right - width as i32).max(left);
+        }
+        if y + height as i32 > bottom {
+            y = (bottom - height as i32).max(top);
+        }
+        x = x.max(left);
+        y = y.max(top);
+    }
+
+    window
+        .set_size(PhysicalSize::new(width, height))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_position(PhysicalPosition::new(x, y))
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -1144,6 +1199,7 @@ fn main() {
             start_overlay_drag,
             resize_overlay_to_content,
             resize_overlay_width,
+            resize_overlay_manual,
             get_overlay_payload,
             get_cursor_position
         ])

@@ -7,6 +7,8 @@ $index = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\index.html") -
 $ui = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\main.js") -Raw
 $overlay = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\overlay.html") -Raw
 $tauriConfig = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\tauri.conf.json") -Raw
+$manifest = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\app.exe.manifest") -Raw
+$buildScript = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\build.rs") -Raw
 
 $checks = @(
   @{ Name = "start hides old overlay"; Pattern = 'get_webview_window\("overlay"\)' },
@@ -37,6 +39,7 @@ $mustHave = @(
   @{ Name = "translation background color picker"; Pattern = 'id="translationBackground" type="color"' },
   @{ Name = "overlay content resize command"; Pattern = 'resize_overlay_to_content' },
   @{ Name = "overlay width resize command"; Pattern = 'resize_overlay_width' },
+  @{ Name = "overlay manual size resize command"; Pattern = 'resize_overlay_manual' },
   @{ Name = "overlay drag command"; Pattern = 'start_overlay_drag' },
   @{ Name = "settings autosave function"; Pattern = 'function scheduleSave' },
   @{ Name = "show source participates in autosave"; Pattern = 'els\.showSource' }
@@ -134,10 +137,20 @@ if ($overlay -notmatch 'addEventListener\("resize"' -or $overlay -notmatch 'setT
 }
 Write-Host "[PASS] overlay reflows when manually resized"
 
-if ($overlay -notmatch 'id="resizeHandle"' -or $overlay -notmatch 'pointerdown' -or $overlay -notmatch 'ew-resize' -or $overlay -notmatch 'flex:\s*0 0 6px') {
+if ($overlay -notmatch 'id="resizeHandle"' -or $overlay -notmatch 'pointerdown' -or $overlay -notmatch 'ew-resize' -or $overlay -notmatch 'flex:\s*0 0 16px') {
   throw "[FAIL] overlay does not expose a custom width resize handle"
 }
 Write-Host "[PASS] overlay exposes custom width resize handle"
+
+if ($overlay -notmatch 'id="cornerResizeHandle"' -or $overlay -notmatch 'nwse-resize' -or $overlay -notmatch 'resize_overlay_manual') {
+  throw "[FAIL] overlay does not expose a custom width/height resize handle"
+}
+Write-Host "[PASS] overlay exposes custom width/height resize handle"
+
+if ($overlay -notmatch 'margin:\s*10px 7px' -or $overlay -notmatch 'width:\s*2px') {
+  throw "[FAIL] overlay resize handle hit target is not wider than its visual grip"
+}
+Write-Host "[PASS] overlay resize handle has a wide hit target"
 
 if ($main -match 'request\.width\.clamp\(160,\s*cfg\.overlay\.width') {
   throw "[FAIL] overlay resize still clamps manual width to configured width"
@@ -159,7 +172,7 @@ if ($main -notmatch 'ocr_translation_blocks' -or $main -notmatch 'flush_translat
 }
 Write-Host "[PASS] OCR translation uses semantic paragraph blocks"
 
-if ($overlay -notmatch 'manualWidth' -or $overlay -notmatch 'blocks\.scrollHeight' -or $overlay -notmatch 'resize_overlay_width') {
+if ($overlay -notmatch 'manualWidth' -or $overlay -notmatch 'manualHeight' -or $overlay -notmatch 'blocks\.scrollHeight' -or $overlay -notmatch 'resize_overlay_width') {
   throw "[FAIL] overlay manual resize state or full content height measurement is missing"
 }
 Write-Host "[PASS] overlay preserves manual width and measures full content height"
@@ -173,6 +186,11 @@ if ($overlay -notmatch 'max-width:\s*100%' -or $overlay -notmatch 'box-sizing:\s
   throw "[FAIL] overlay text sections are not constrained to resized width"
 }
 Write-Host "[PASS] overlay text sections follow resized width"
+
+if ($manifest -notmatch 'requestedExecutionLevel level="requireAdministrator"' -or $buildScript -notmatch 'embed_resource::compile\("app\.manifest\.rc"') {
+  throw "[FAIL] Windows executable does not request administrator privileges"
+}
+Write-Host "[PASS] Windows executable requests administrator privileges"
 
 $mustNotHave = @(
   'id="ocrEngine"',
