@@ -18,6 +18,31 @@
       body {
         position: relative;
       }
+      #resizeHandle {
+        position: fixed;
+        top: 0;
+        right: 10px;
+        width: 10px;
+        height: 100vh;
+        z-index: 20;
+        cursor: ew-resize;
+        background: transparent;
+      }
+      #resizeHandle::after {
+        content: "";
+        position: absolute;
+        top: 12px;
+        right: 3px;
+        width: 2px;
+        height: calc(100vh - 24px);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0);
+        transition: background 120ms ease;
+      }
+      #resizeHandle:hover::after,
+      #resizeHandle.resizing::after {
+        background: rgba(255, 255, 255, 0.36);
+      }
       #blocks {
         width: 100vw;
         height: auto;
@@ -171,6 +196,7 @@
       </div>
     </div>
     <div id="scrollTrack"><div id="scrollThumb"></div></div>
+    <div id="resizeHandle" title="拖动调整宽度"></div>
     <script>
       const invoke = (...args) => window.__TAURI__.core.invoke(...args);
       const listen = (...args) => window.__TAURI__.event.listen(...args);
@@ -182,11 +208,13 @@
       const translationText = document.querySelector("#translationText");
       const scrollTrack = document.querySelector("#scrollTrack");
       const scrollThumb = document.querySelector("#scrollThumb");
+      const resizeHandle = document.querySelector("#resizeHandle");
       let doubleClickClose = true;
       let draggable = true;
       let maxHeight = 620;
       let resizeFrame = 0;
       let lastResizeRequest = { width: 0, height: 0 };
+      let resizing = null;
 
       function cleanDisplayText(value) {
         return String(value ?? "")
@@ -301,10 +329,60 @@
       });
 
       window.addEventListener("mousedown", async (event) => {
-        if (!draggable || event.button !== 0 || event.detail > 1) return;
+        if (
+          !draggable ||
+          event.button !== 0 ||
+          event.detail > 1 ||
+          event.target === resizeHandle
+        )
+          return;
         event.preventDefault();
         await invoke("start_overlay_drag").catch(() => {});
       });
+      resizeHandle.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        resizeHandle.setPointerCapture(event.pointerId);
+        resizeHandle.classList.add("resizing");
+        resizing = {
+          pointerId: event.pointerId,
+          startX: event.screenX,
+          startWidth: window.innerWidth || blocks.getBoundingClientRect().width || 160,
+          pendingWidth: window.innerWidth || blocks.getBoundingClientRect().width || 160,
+          frame: 0,
+        };
+      });
+      resizeHandle.addEventListener("pointermove", (event) => {
+        if (!resizing || resizing.pointerId !== event.pointerId) return;
+        event.preventDefault();
+        const width = Math.max(160, Math.min(1200, resizing.startWidth + event.screenX - resizing.startX));
+        resizing.pendingWidth = width;
+        if (resizing.frame) return;
+        resizing.frame = requestAnimationFrame(async () => {
+          if (!resizing) return;
+          const requestWidth = Math.round(resizing.pendingWidth);
+          resizing.frame = 0;
+          await invoke("resize_overlay_to_content", {
+            request: {
+              width: requestWidth,
+              height: Math.max(window.innerHeight || 54, 54),
+            },
+          }).catch(() => {});
+          scheduleResizeToContent();
+        });
+      });
+      function stopResize(event) {
+        if (!resizing || resizing.pointerId !== event.pointerId) return;
+        if (resizing.frame) {
+          cancelAnimationFrame(resizing.frame);
+        }
+        resizing = null;
+        resizeHandle.classList.remove("resizing");
+        scheduleResizeToContent();
+      }
+      resizeHandle.addEventListener("pointerup", stopResize);
+      resizeHandle.addEventListener("pointercancel", stopResize);
       window.addEventListener("resize", scheduleResizeToContent);
       blocks.addEventListener("scroll", updateScrollIndicator, { passive: true });
     </script>

@@ -621,6 +621,39 @@ mod tests {
         assert!(rect.width >= 120, "{rect:?}");
         assert!(rect.height >= 45, "{rect:?}");
     }
+
+    #[test]
+    fn builds_translation_blocks_from_wrapped_ocr_text() {
+        let blocks = ocr_translation_blocks(
+            "[Passive Benefit]\n\
+You can manually trigger the\n\
+[Vanguard] versions of [Shield\n\
+Charge], [Thrust Force], and\n\
+[Overwhelm] by pressing the\n\
+[Regular Attack Button] while you\n\
+have at least 10 [Guardian's\n\
+Graces], consuming them. If you do\n\
+not have enough, the normal\n\
+execution will occur.\n\
+Parrying an attack using a\n\
+[Vanguard] reduces the damage of\n\
+the incoming attack to a maximum\n\
+of 10% of Max HP.\n\
+[Buff]\n\
+Movement Speed increased by 50%",
+        );
+        assert_eq!(blocks[0], "[Passive Benefit]");
+        assert_eq!(
+            blocks[1],
+            "You can manually trigger the [Vanguard] versions of [Shield Charge], [Thrust Force], and [Overwhelm] by pressing the [Regular Attack Button] while you have at least 10 [Guardian's Graces], consuming them. If you do not have enough, the normal execution will occur."
+        );
+        assert_eq!(
+            blocks[2],
+            "Parrying an attack using a [Vanguard] reduces the damage of the incoming attack to a maximum of 10% of Max HP."
+        );
+        assert_eq!(blocks[3], "[Buff]");
+        assert_eq!(blocks[4], "Movement Speed increased by 50%");
+    }
 }
 
 fn clear_overlay_payload(app: &tauri::AppHandle) {
@@ -715,11 +748,14 @@ async fn translate_preserving_lines(
     settings: &std::collections::HashMap<String, String>,
     raw_text: &str,
 ) -> anyhow::Result<String> {
-    let lines: Vec<&str> = raw_text.lines().collect();
-    if lines.len() <= 1 {
+    let blocks = ocr_translation_blocks(raw_text);
+    if blocks.len() <= 1 {
         return translate(TranslationRequest {
             provider_id: cfg.translator.clone(),
-            text: raw_text.to_string(),
+            text: blocks
+                .first()
+                .cloned()
+                .unwrap_or_else(|| raw_text.trim().to_string()),
             source_lang: cfg.source_lang.clone(),
             target_lang: cfg.target_lang.clone(),
             settings: settings.clone(),
@@ -728,15 +764,11 @@ async fn translate_preserving_lines(
         .map(|r| r.text);
     }
 
-    let mut translated = Vec::with_capacity(lines.len());
-    for line in lines {
-        if line.trim().is_empty() {
-            translated.push(String::new());
-            continue;
-        }
+    let mut translated = Vec::with_capacity(blocks.len());
+    for block in blocks {
         let text = translate(TranslationRequest {
             provider_id: cfg.translator.clone(),
-            text: line.to_string(),
+            text: block,
             source_lang: cfg.source_lang.clone(),
             target_lang: cfg.target_lang.clone(),
             settings: settings.clone(),
@@ -745,7 +777,73 @@ async fn translate_preserving_lines(
         .map(|r| r.text)?;
         translated.push(text.trim().to_string());
     }
-    Ok(translated.join("\n"))
+    Ok(translated.join("\n\n"))
+}
+
+fn ocr_translation_blocks(raw_text: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut paragraph = String::new();
+    let mut previous_line_ended_sentence = false;
+
+    for raw_line in raw_text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            flush_translation_paragraph(&mut blocks, &mut paragraph);
+            previous_line_ended_sentence = false;
+            continue;
+        }
+
+        if is_ocr_heading(line) {
+            flush_translation_paragraph(&mut blocks, &mut paragraph);
+            blocks.push(line.to_string());
+            previous_line_ended_sentence = false;
+            continue;
+        }
+
+        if previous_line_ended_sentence && starts_like_new_sentence(line) {
+            flush_translation_paragraph(&mut blocks, &mut paragraph);
+        }
+
+        if !paragraph.is_empty() {
+            paragraph.push(' ');
+        }
+        paragraph.push_str(line);
+        previous_line_ended_sentence = ends_sentence(line);
+    }
+
+    flush_translation_paragraph(&mut blocks, &mut paragraph);
+    blocks
+}
+
+fn flush_translation_paragraph(blocks: &mut Vec<String>, paragraph: &mut String) {
+    let text = paragraph.trim();
+    if !text.is_empty() {
+        blocks.push(text.to_string());
+    }
+    paragraph.clear();
+}
+
+fn is_ocr_heading(line: &str) -> bool {
+    line.starts_with('[')
+        && line.ends_with(']')
+        && line.chars().count() <= 48
+        && line.matches('[').count() == 1
+        && line.matches(']').count() == 1
+}
+
+fn starts_like_new_sentence(line: &str) -> bool {
+    let mut chars = line.chars().filter(|ch| !ch.is_whitespace());
+    matches!(chars.next(), Some(ch) if ch.is_ascii_uppercase() || ch == '[')
+}
+
+fn ends_sentence(line: &str) -> bool {
+    let trimmed = line.trim_end();
+    trimmed.ends_with('.')
+        || trimmed.ends_with('!')
+        || trimmed.ends_with('?')
+        || trimmed.ends_with('。')
+        || trimmed.ends_with('！')
+        || trimmed.ends_with('？')
 }
 
 fn show_overlay(

@@ -133,10 +133,20 @@ if ($overlay -notmatch 'addEventListener\("resize",\s*scheduleResizeToContent\)'
 }
 Write-Host "[PASS] overlay reflows when manually resized"
 
+if ($overlay -notmatch 'id="resizeHandle"' -or $overlay -notmatch 'pointerdown' -or $overlay -notmatch 'ew-resize') {
+  throw "[FAIL] overlay does not expose a custom width resize handle"
+}
+Write-Host "[PASS] overlay exposes custom width resize handle"
+
 if ($main -match 'request\.width\.clamp\(160,\s*cfg\.overlay\.width') {
   throw "[FAIL] overlay resize still clamps manual width to configured width"
 }
 Write-Host "[PASS] overlay manual width is not clamped to configured width"
+
+if ($main -notmatch 'ocr_translation_blocks' -or $main -notmatch 'flush_translation_paragraph' -or $main -match 'for line in lines') {
+  throw "[FAIL] OCR translation still uses visual line-by-line translation"
+}
+Write-Host "[PASS] OCR translation uses semantic paragraph blocks"
 
 if ($overlay -notmatch 'max-width:\s*100%' -or $overlay -notmatch 'box-sizing:\s*border-box') {
   throw "[FAIL] overlay text sections are not constrained to resized width"

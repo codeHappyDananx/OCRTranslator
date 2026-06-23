@@ -42,7 +42,7 @@ try {
 
   cargo fmt --check
   cargo check
-  cargo test -p ocr-translator detects_nearby_ui_text_region
+  cargo test -p ocr-translator
   powershell -ExecutionPolicy Bypass -File scripts\ui_state_regression.ps1
   powershell -ExecutionPolicy Bypass -File scripts\ocr_regression.ps1 -Engine oneocr
   cargo build -p ocr-translator --release
