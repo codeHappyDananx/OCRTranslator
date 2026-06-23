@@ -60,10 +60,6 @@ struct FrozenScreen {
 #[derive(Clone, Serialize)]
 struct SelectionDimPayload {
     image_data_url: Option<String>,
-    image_width: i32,
-    image_height: i32,
-    offset_x: i32,
-    offset_y: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -728,31 +724,55 @@ fn show_selection_dim(
     let window = get_or_create_selection_dim(app)?;
     let rect = virtual_screen_rect();
     let overscan = 24;
+    let window_width = (rect.width + overscan * 2).max(1);
+    let window_height = (rect.height + overscan * 2).max(1);
     window.set_position(PhysicalPosition::new(rect.x - overscan, rect.y - overscan))?;
-    window.set_size(PhysicalSize::new(
-        (rect.width + overscan * 2).max(1) as u32,
-        (rect.height + overscan * 2).max(1) as u32,
-    ))?;
-    let payload = frozen_screen.map(|screen| SelectionDimPayload {
-        image_data_url: Some(format!(
-            "data:image/png;base64,{}",
-            BASE64_STANDARD.encode(&screen.png)
-        )),
-        image_width: screen.rect.width,
-        image_height: screen.rect.height,
-        offset_x: screen.rect.x - (rect.x - overscan),
-        offset_y: screen.rect.y - (rect.y - overscan),
+    window.set_size(PhysicalSize::new(window_width as u32, window_height as u32))?;
+    let payload = frozen_screen.and_then(|screen| {
+        selection_dim_frame_data_url(screen, window_width, window_height, overscan, overscan)
+            .ok()
+            .map(|image_data_url| SelectionDimPayload {
+                image_data_url: Some(image_data_url),
+            })
     });
     let payload = payload.unwrap_or(SelectionDimPayload {
         image_data_url: None,
-        image_width: rect.width,
-        image_height: rect.height,
-        offset_x: overscan,
-        offset_y: overscan,
     });
     let _ = window.emit("selection-dim-frame", payload);
     window.show()?;
     Ok(())
+}
+
+fn selection_dim_frame_data_url(
+    screen: &FrozenScreen,
+    width: i32,
+    height: i32,
+    offset_x: i32,
+    offset_y: i32,
+) -> anyhow::Result<String> {
+    if width <= 0 || height <= 0 {
+        anyhow::bail!("截图层尺寸无效");
+    }
+    let source = image::load_from_memory(&screen.png)?.to_rgba8();
+    let source_width = source.width() as i32;
+    let source_height = source.height() as i32;
+    if source_width <= 0 || source_height <= 0 {
+        anyhow::bail!("冻结截图尺寸无效");
+    }
+    let mut canvas = RgbaImage::new(width as u32, height as u32);
+    for y in 0..height {
+        let source_y = (y - offset_y).clamp(0, source_height - 1) as u32;
+        for x in 0..width {
+            let source_x = (x - offset_x).clamp(0, source_width - 1) as u32;
+            canvas.put_pixel(x as u32, y as u32, *source.get_pixel(source_x, source_y));
+        }
+    }
+    let mut out = Cursor::new(Vec::new());
+    canvas.write_to(&mut out, ImageFormat::Png)?;
+    Ok(format!(
+        "data:image/png;base64,{}",
+        BASE64_STANDARD.encode(out.into_inner())
+    ))
 }
 
 fn show_selection_box(app: &tauri::AppHandle, rect: Rect) -> anyhow::Result<()> {
@@ -1029,6 +1049,39 @@ mod tests {
         assert!(rect.y <= 76, "{rect:?}");
         assert!(rect.width >= 120, "{rect:?}");
         assert!(rect.height >= 45, "{rect:?}");
+    }
+
+    #[test]
+    fn selection_dim_frame_matches_window_size_and_extends_edges() {
+        let mut source = RgbaImage::new(2, 2);
+        source.put_pixel(0, 0, Rgba([10, 20, 30, 255]));
+        source.put_pixel(1, 0, Rgba([40, 50, 60, 255]));
+        source.put_pixel(0, 1, Rgba([70, 80, 90, 255]));
+        source.put_pixel(1, 1, Rgba([100, 110, 120, 255]));
+        let mut png = Cursor::new(Vec::new());
+        source.write_to(&mut png, ImageFormat::Png).unwrap();
+        let screen = FrozenScreen {
+            rect: Rect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2,
+            },
+            png: png.into_inner(),
+        };
+
+        let data_url = selection_dim_frame_data_url(&screen, 4, 4, 1, 1).unwrap();
+        let encoded = data_url
+            .strip_prefix("data:image/png;base64,")
+            .expect("data url prefix");
+        let frame_png = BASE64_STANDARD.decode(encoded).unwrap();
+        let frame = image::load_from_memory(&frame_png).unwrap().to_rgba8();
+
+        assert_eq!(frame.dimensions(), (4, 4));
+        assert_eq!(*frame.get_pixel(0, 0), Rgba([10, 20, 30, 255]));
+        assert_eq!(*frame.get_pixel(1, 1), Rgba([10, 20, 30, 255]));
+        assert_eq!(*frame.get_pixel(2, 1), Rgba([40, 50, 60, 255]));
+        assert_eq!(*frame.get_pixel(3, 3), Rgba([100, 110, 120, 255]));
     }
 
     #[test]

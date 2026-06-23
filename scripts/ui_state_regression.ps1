@@ -99,15 +99,15 @@ if ($selectionDim -notmatch 'contextmenu' -or $selectionDim -notmatch 'mousedown
 }
 Write-Host "[PASS] OCR dim layer blocks background clicks like a screenshot surface"
 
-if ($selectionDim -notmatch 'id="frozenScreen"' -or $selectionDim -notmatch 'selection-dim-frame' -or $main -notmatch 'BASE64_STANDARD\.encode\(&screen\.png\)' -or $main -notmatch 'image_data_url') {
+if ($selectionDim -notmatch 'id="frozenScreen"' -or $selectionDim -notmatch 'selection-dim-frame' -or $main -notmatch 'selection_dim_frame_data_url' -or $main -notmatch 'image_data_url') {
   throw "[FAIL] OCR dim layer does not display the frozen screenshot"
 }
 Write-Host "[PASS] OCR dim layer displays the frozen screenshot"
 
-if ($selectionDim -notmatch 'window\.devicePixelRatio' -or $selectionDim -notmatch 'physicalToCss' -or $selectionDim -notmatch 'physicalToCss\(payload\.image_width') {
-  throw "[FAIL] OCR dim layer does not convert physical screenshot pixels to CSS pixels"
+if ($main -notmatch 'fn selection_dim_frame_data_url' -or $main -notmatch 'source_x = \(x - offset_x\)\.clamp' -or $main -notmatch 'source_y = \(y - offset_y\)\.clamp' -or $selectionDim -notmatch 'width:\s*100%' -or $selectionDim -notmatch 'height:\s*100%') {
+  throw "[FAIL] OCR dim layer does not use a precomposited frozen screenshot frame"
 }
-Write-Host "[PASS] OCR dim layer converts physical screenshot pixels to CSS pixels"
+Write-Host "[PASS] OCR dim layer uses a precomposited frozen screenshot frame"
 
 if ($main -notmatch 'fn hide_main_window_for_selection' -or $main -notmatch 'get_webview_window\("main"\)' -or $main -notmatch 'tokio::time::sleep\(Duration::from_millis\(90\)\)' -or $main -notmatch 'fn restore_main_window_after_selection') {
   throw "[FAIL] OCR selection does not hide and restore the main window around capture"
