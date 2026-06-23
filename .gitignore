@@ -1,0 +1,8 @@
+/target/
+/installer/
+/crates/app-tauri/resources/SnippingTool/
+/.vs/
+/.vscode/
+*.pdb
+*.log
+*.tmp

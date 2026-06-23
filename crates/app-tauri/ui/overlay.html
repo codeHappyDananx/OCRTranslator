@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OCR 翻译</title>
+    <style>
+      html,
+      body {
+        width: 100%;
+        height: auto;
+        min-height: 0;
+        margin: 0;
+        overflow: hidden;
+        background: transparent;
+        user-select: none;
+      }
+      body {
+        position: relative;
+      }
+      #blocks {
+        width: 100vw;
+        height: auto;
+        min-height: 0;
+        max-height: 620px;
+        padding: 0;
+        color: white;
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        align-items: start;
+        justify-content: flex-start;
+        text-shadow:
+          0 1px 2px rgba(0, 0, 0, 0.95),
+          1px 0 1px rgba(0, 0, 0, 0.85),
+          -1px 0 1px rgba(0, 0, 0, 0.85),
+          0 -1px 1px rgba(0, 0, 0, 0.85);
+        font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+        line-height: 1.45;
+        white-space: normal;
+        box-sizing: border-box;
+        overflow-x: hidden;
+        overflow-y: auto;
+        cursor: default;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.42) rgba(0, 0, 0, 0.08);
+      }
+      #blocks::-webkit-scrollbar {
+        width: 8px;
+      }
+      #blocks::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.08);
+      }
+      #blocks::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.34);
+        border-radius: 999px;
+        border: 2px solid rgba(0, 0, 0, 0.08);
+      }
+      #blocks::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.52);
+      }
+      #blocks.scrolling {
+        overflow-y: scroll;
+      }
+      #scrollTrack {
+        position: fixed;
+        top: 6px;
+        right: 3px;
+        width: 6px;
+        height: calc(100vh - 12px);
+        border-radius: 999px;
+        background: rgba(0, 0, 0, 0.12);
+        pointer-events: none;
+        opacity: 0;
+        z-index: 10;
+        transition: opacity 120ms ease;
+      }
+      #scrollTrack.visible {
+        opacity: 1;
+      }
+      #scrollThumb {
+        width: 100%;
+        min-height: 28px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.42);
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
+        transform: translateY(0);
+      }
+      #blocks.draggable {
+        cursor: move;
+      }
+      .block {
+        padding: 6px 12px 14px;
+        border: 0;
+        border-radius: 0;
+        box-sizing: border-box;
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        justify-content: flex-start;
+        flex: 0 0 auto;
+        min-height: 0;
+        align-self: start;
+        overflow: visible;
+      }
+      #sourceBlock:not(.hidden) {
+        padding-bottom: 30px;
+      }
+      #translationBlock {
+        padding-top: 8px;
+      }
+      .block:first-child {
+        border-radius: 8px 8px 0 0;
+      }
+      .block:last-child {
+        border-radius: 0 0 8px 8px;
+      }
+      .block:only-child {
+        border-radius: 8px;
+      }
+      #translationBlock.solo {
+        border-radius: 8px;
+      }
+      .title {
+        margin: 0 0 4px;
+        color: rgba(255, 255, 255, 0.96);
+        font-size: 0.72em;
+        font-weight: 700;
+        line-height: 1;
+      }
+      .section {
+        margin: 0;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        align-self: stretch;
+      }
+      #sourceBlock {
+        background: rgba(40, 88, 165, 0.55);
+      }
+      #translationBlock {
+        background: rgba(18, 120, 88, 0.55);
+      }
+      #sourceText {
+        color: rgba(255, 255, 255, 0.98);
+        font-size: 0.86em;
+      }
+      #translationText {
+        color: rgba(255, 255, 255, 1);
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      .hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="blocks">
+      <div id="sourceBlock" class="block hidden">
+        <div class="title">原文</div>
+        <div id="sourceText" class="section"></div>
+      </div>
+      <div id="translationBlock" class="block">
+        <div id="translationTitle" class="title hidden">译文</div>
+        <div id="translationText" class="section"></div>
+      </div>
+    </div>
+    <div id="scrollTrack"><div id="scrollThumb"></div></div>
+    <script>
+      const invoke = (...args) => window.__TAURI__.core.invoke(...args);
+      const listen = (...args) => window.__TAURI__.event.listen(...args);
+      const blocks = document.querySelector("#blocks");
+      const sourceBlock = document.querySelector("#sourceBlock");
+      const sourceText = document.querySelector("#sourceText");
+      const translationBlock = document.querySelector("#translationBlock");
+      const translationTitle = document.querySelector("#translationTitle");
+      const translationText = document.querySelector("#translationText");
+      const scrollTrack = document.querySelector("#scrollTrack");
+      const scrollThumb = document.querySelector("#scrollThumb");
+      let doubleClickClose = true;
+      let draggable = true;
+      let maxHeight = 620;
+
+      function cleanDisplayText(value) {
+        return String(value ?? "")
+          .replace(/\r\n/g, "\n")
+          .split("\n")
+          .map((line) => line.trim())
+          .join("\n")
+          .replace(/\n{3,}/g, "\n\n")
+          .trim();
+      }
+
+      function hexToRgba(hex, opacity, fallback) {
+        const value = /^#[0-9a-f]{6}$/i.test(String(hex ?? "")) ? hex : fallback;
+        const intValue = Number.parseInt(value.slice(1), 16);
+        const r = (intValue >> 16) & 255;
+        const g = (intValue >> 8) & 255;
+        const b = intValue & 255;
+        return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+      }
+
+      function render(payload) {
+        const rawText = cleanDisplayText(payload.raw_text);
+        const translatedText = cleanDisplayText(payload.text) || "无翻译结果";
+        const showSource = payload.show_source === true && !!rawText;
+        sourceText.textContent = showSource ? rawText : "";
+        sourceBlock.classList.toggle("hidden", !showSource);
+        translationBlock.classList.toggle("solo", !showSource);
+        translationTitle.classList.toggle("hidden", !showSource);
+        translationText.textContent = translatedText;
+        const opacity = payload.opacity ?? 0.55;
+        maxHeight = Math.max(54, Number(payload.max_height ?? 620));
+        sourceBlock.style.background = hexToRgba(payload.source_background, opacity, "#2858a5");
+        translationBlock.style.background = hexToRgba(
+          payload.translation_background,
+          opacity,
+          "#127858",
+        );
+        blocks.style.fontSize = `${payload.font_size ?? 18}px`;
+        blocks.style.maxHeight = `${maxHeight}px`;
+        blocks.classList.remove("scrolling");
+        doubleClickClose = payload.double_click_close !== false;
+        draggable = payload.draggable !== false;
+        blocks.classList.toggle("draggable", draggable);
+        requestAnimationFrame(resizeToContent);
+      }
+
+      function updateScrollIndicator() {
+        const canScroll =
+          blocks.scrollHeight > blocks.clientHeight + 1 ||
+          blocks.classList.contains("scrolling");
+        scrollTrack.classList.toggle("visible", canScroll);
+        if (!canScroll) return;
+        const trackHeight = scrollTrack.getBoundingClientRect().height;
+        const ratio = blocks.clientHeight / blocks.scrollHeight;
+        const thumbHeight = Math.max(28, Math.floor(trackHeight * ratio));
+        const maxThumbTop = Math.max(0, trackHeight - thumbHeight);
+        const maxScroll = Math.max(1, blocks.scrollHeight - blocks.clientHeight);
+        const thumbTop = Math.round((blocks.scrollTop / maxScroll) * maxThumbTop);
+        scrollThumb.style.height = `${thumbHeight}px`;
+        scrollThumb.style.transform = `translateY(${thumbTop}px)`;
+      }
+
+      async function resizeToContent() {
+        blocks.style.height = "auto";
+        blocks.style.minHeight = "0";
+        blocks.style.maxHeight = `${maxHeight}px`;
+        const contentHeight =
+          sourceBlock.getBoundingClientRect().height +
+          translationBlock.getBoundingClientRect().height;
+        blocks.classList.toggle("scrolling", contentHeight > maxHeight + 1);
+        const rect = blocks.getBoundingClientRect();
+        const width = Math.ceil(rect.width + 2);
+        const height = Math.ceil(Math.min(rect.height, maxHeight) + 2);
+        await invoke("resize_overlay_to_content", {
+          request: {
+            width: Math.max(width, 160),
+            height: Math.max(height, 54),
+          },
+        }).catch(() => {});
+        requestAnimationFrame(updateScrollIndicator);
+      }
+
+      listen("overlay-show", (event) => {
+        render(event.payload);
+      });
+
+      invoke("get_overlay_payload")
+        .then((payload) => {
+          if (payload) render(payload);
+        })
+        .catch(() => {});
+
+      window.addEventListener("dblclick", async () => {
+        if (doubleClickClose) {
+          await invoke("close_overlay");
+        }
+      });
+
+      window.addEventListener("mousedown", async (event) => {
+        if (!draggable || event.button !== 0 || event.detail > 1) return;
+        event.preventDefault();
+        await invoke("start_overlay_drag").catch(() => {});
+      });
+      blocks.addEventListener("scroll", updateScrollIndicator, { passive: true });
+    </script>
+  </body>
+</html>

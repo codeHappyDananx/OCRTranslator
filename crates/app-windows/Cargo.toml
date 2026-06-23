@@ -1,0 +1,17 @@
+[package]
+name = "app-windows"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+image.workspace = true
+libloading.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+tokio.workspace = true
+windows.workspace = true
+zip.workspace = true
