@@ -23,6 +23,7 @@ $checks = @(
   @{ Name = "selection uses fullscreen dim window"; Pattern = 'selection-dim\.html' },
   @{ Name = "selection shows entry hint"; Pattern = 'show_selection_hint' },
   @{ Name = "selection freezes screen before dragging"; Pattern = 'capture_frozen_screen\(\)' },
+  @{ Name = "selection hides main window before capture"; Pattern = 'hide_main_window_for_selection\(&app\)' },
   @{ Name = "OCR crops frozen screen after selection"; Pattern = 'crop_frozen_screen_png' },
   @{ Name = "selection listens reset"; Pattern = 'listen\("selection-reset", resetSelection\)' },
   @{ Name = "selection blur reset"; Pattern = 'addEventListener\("blur", resetSelection\)' },
@@ -102,6 +103,16 @@ if ($selectionDim -notmatch 'id="frozenScreen"' -or $selectionDim -notmatch 'sel
   throw "[FAIL] OCR dim layer does not display the frozen screenshot"
 }
 Write-Host "[PASS] OCR dim layer displays the frozen screenshot"
+
+if ($selectionDim -notmatch 'window\.devicePixelRatio' -or $selectionDim -notmatch 'physicalToCss' -or $selectionDim -notmatch 'physicalToCss\(payload\.image_width') {
+  throw "[FAIL] OCR dim layer does not convert physical screenshot pixels to CSS pixels"
+}
+Write-Host "[PASS] OCR dim layer converts physical screenshot pixels to CSS pixels"
+
+if ($main -notmatch 'fn hide_main_window_for_selection' -or $main -notmatch 'get_webview_window\("main"\)' -or $main -notmatch 'tokio::time::sleep\(Duration::from_millis\(90\)\)' -or $main -notmatch 'fn restore_main_window_after_selection') {
+  throw "[FAIL] OCR selection does not hide and restore the main window around capture"
+}
+Write-Host "[PASS] OCR selection hides and restores the main window around capture"
 
 if ($main -notmatch 'let overscan = 24' -or $main -notmatch 'rect\.x - overscan' -or $main -notmatch 'rect\.width \+ overscan \* 2') {
   throw "[FAIL] OCR dim layer does not overscan the virtual screen edges"

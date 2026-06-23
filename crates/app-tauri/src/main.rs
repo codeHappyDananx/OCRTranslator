@@ -482,6 +482,10 @@ fn start_mouse_selection(app: tauri::AppHandle) {
         }
         let _ = hide_selection_box(&app);
         let _ = hide_selection_dim(&app);
+        let restore_main_window = hide_main_window_for_selection(&app);
+        if restore_main_window {
+            tokio::time::sleep(Duration::from_millis(90)).await;
+        }
         let frozen_screen = match capture_frozen_screen() {
             Ok(screen) => Some(screen),
             Err(err) => {
@@ -495,14 +499,14 @@ fn start_mouse_selection(app: tauri::AppHandle) {
         }
         while left_mouse_down() {
             if selection_cancel_requested(&app) || right_mouse_down() {
-                finish_selection_cancel(&app);
+                finish_selection_cancel(&app, restore_main_window);
                 return;
             }
             tokio::time::sleep(Duration::from_millis(16)).await;
         }
         loop {
             if selection_cancel_requested(&app) || right_mouse_down() {
-                finish_selection_cancel(&app);
+                finish_selection_cancel(&app, restore_main_window);
                 return;
             }
             if left_mouse_down() {
@@ -514,7 +518,7 @@ fn start_mouse_selection(app: tauri::AppHandle) {
             Ok(point) => point,
             Err(err) => {
                 let _ = app.emit("ocr-status", format!("无法读取鼠标位置：{err}"));
-                finish_selection_cancel(&app);
+                finish_selection_cancel(&app, restore_main_window);
                 return;
             }
         };
@@ -527,7 +531,7 @@ fn start_mouse_selection(app: tauri::AppHandle) {
         };
         while left_mouse_down() {
             if selection_cancel_requested(&app) || right_mouse_down() {
-                finish_selection_cancel(&app);
+                finish_selection_cancel(&app, restore_main_window);
                 return;
             }
             if let Ok(current) = cursor_position() {
@@ -549,13 +553,16 @@ fn start_mouse_selection(app: tauri::AppHandle) {
         let rect = rect_from_points(start, end);
         let cfg = match app.state::<AppState>().config.lock().map(|cfg| cfg.clone()) {
             Ok(cfg) => cfg,
-            Err(_) => return,
+            Err(_) => {
+                restore_main_window_after_selection(&app, restore_main_window);
+                return;
+            }
         };
         if rect.width < 16 || rect.height < 16 {
             match auto_detect_selection_rect(&app, end) {
                 Ok(Some(rect)) => {
                     let _ = run_pipeline(
-                        app,
+                        app.clone(),
                         cfg,
                         SelectionPayload { rect, anchor: end },
                         frozen_screen,
@@ -570,15 +577,17 @@ fn start_mouse_selection(app: tauri::AppHandle) {
                     let _ = show_user_message(&app, &cfg, end, "这次没有选到文字，请重新试一次。");
                 }
             }
+            restore_main_window_after_selection(&app, restore_main_window);
             return;
         }
         let _ = run_pipeline(
-            app,
+            app.clone(),
             cfg,
             SelectionPayload { rect, anchor: end },
             frozen_screen,
         )
         .await;
+        restore_main_window_after_selection(&app, restore_main_window);
     });
 }
 
@@ -595,11 +604,32 @@ fn finish_selection_state(app: &tauri::AppHandle) {
     }
 }
 
-fn finish_selection_cancel(app: &tauri::AppHandle) {
+fn finish_selection_cancel(app: &tauri::AppHandle, restore_main_window: bool) {
     let _ = hide_selection_box(app);
     let _ = hide_selection_dim(app);
     finish_selection_state(app);
+    restore_main_window_after_selection(app, restore_main_window);
     let _ = app.emit("ocr-status", "已取消");
+}
+
+fn hide_main_window_for_selection(app: &tauri::AppHandle) -> bool {
+    let Some(window) = app.get_webview_window("main") else {
+        return false;
+    };
+    let Ok(true) = window.is_visible() else {
+        return false;
+    };
+    let _ = window.hide();
+    true
+}
+
+fn restore_main_window_after_selection(app: &tauri::AppHandle, restore: bool) {
+    if !restore {
+        return;
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+    }
 }
 
 fn capture_frozen_screen() -> anyhow::Result<FrozenScreen> {

@@ -40,6 +40,10 @@
     <script>
       const listen = (...args) => window.__TAURI__.event.listen(...args);
       const frozenScreen = document.getElementById("frozenScreen");
+      const physicalToCss = (value) => {
+        const ratio = window.devicePixelRatio || 1;
+        return `${(Number(value) || 0) / ratio}px`;
+      };
       listen("selection-dim-frame", (event) => {
         const payload = event.payload || {};
         if (!payload.image_data_url) {
@@ -49,10 +53,10 @@
           return;
         }
         frozenScreen.src = payload.image_data_url;
-        frozenScreen.style.left = `${payload.offset_x || 0}px`;
-        frozenScreen.style.top = `${payload.offset_y || 0}px`;
-        frozenScreen.style.width = `${payload.image_width || 1}px`;
-        frozenScreen.style.height = `${payload.image_height || 1}px`;
+        frozenScreen.style.left = physicalToCss(payload.offset_x);
+        frozenScreen.style.top = physicalToCss(payload.offset_y);
+        frozenScreen.style.width = physicalToCss(payload.image_width || 1);
+        frozenScreen.style.height = physicalToCss(payload.image_height || 1);
       });
       for (const eventName of [
         "contextmenu",
