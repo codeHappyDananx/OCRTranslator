@@ -1,6 +1,7 @@
 pub mod cursor;
 pub mod geometry;
 pub mod hotkey;
+pub mod native_selection;
 pub mod ocr;
 pub mod pipeline;
 pub mod screen;
@@ -8,6 +9,7 @@ pub mod screen;
 pub use cursor::{cursor_position, left_mouse_down, release_cursor_lock, right_mouse_down};
 pub use geometry::{Point, Rect};
 pub use hotkey::{GlobalInputEvent, GlobalInputHook, KeyboardEvent, MouseButton, MouseEvent};
+pub use native_selection::select_rect_native;
 pub use ocr::{
     available_windows_ocr_languages, detect_ocr_engines, install_snippingtool_oneocr_runtime,
     preprocess_png_for_windows_ocr, preview_snippingtool_oneocr_package,

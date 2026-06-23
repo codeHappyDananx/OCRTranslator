@@ -2,9 +2,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = "F:\AI\dn-ocr-translator"
 
 $main = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\src\main.rs") -Raw
-$selection = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\selection.html") -Raw
-$selectionBox = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\selection-box.html") -Raw
-$selectionDim = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\selection-dim.html") -Raw
+$nativeSelection = Get-Content (Join-Path $ProjectRoot "crates\app-windows\src\native_selection.rs") -Raw
 $index = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\index.html") -Raw
 $ui = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\main.js") -Raw
 $overlay = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\overlay.html") -Raw
@@ -16,26 +14,19 @@ $hotkey = Get-Content (Join-Path $ProjectRoot "crates\app-windows\src\hotkey.rs"
 $checks = @(
   @{ Name = "start hides old overlay"; Pattern = 'get_webview_window\("overlay"\)' },
   @{ Name = "start clears overlay payload"; Pattern = 'clear_overlay_payload\(app\)' },
-  @{ Name = "preload selection box"; Pattern = 'get_or_create_selection_box\(app\.handle\(\)\)' },
   @{ Name = "mouse selection mode"; Pattern = 'start_mouse_selection\(app\.clone\(\)\)' },
-  @{ Name = "selection uses left mouse polling"; Pattern = 'left_mouse_down\(\)' },
-  @{ Name = "selection uses small box window"; Pattern = 'selection-box\.html' },
-  @{ Name = "selection uses fullscreen dim window"; Pattern = 'selection-dim\.html' },
-  @{ Name = "selection shows entry hint"; Pattern = 'show_selection_hint' },
   @{ Name = "selection freezes screen before dragging"; Pattern = 'capture_frozen_screen\(\)' },
   @{ Name = "selection hides main window before capture"; Pattern = 'hide_main_window_for_selection\(&app\)' },
+  @{ Name = "selection uses native win32 selector"; Pattern = 'select_rect_native\(selection_screen\.rect,\s*&selection_screen\.png\)' },
   @{ Name = "OCR crops frozen screen after selection"; Pattern = 'crop_frozen_screen_png' },
-  @{ Name = "selection listens reset"; Pattern = 'listen\("selection-reset", resetSelection\)' },
-  @{ Name = "selection blur reset"; Pattern = 'addEventListener\("blur", resetSelection\)' },
-  @{ Name = "selection hint mentions right click cancel"; Pattern = '右键或 Esc 取消' },
-  @{ Name = "selection right click cancels"; Pattern = 'event\.button === 2' },
-  @{ Name = "global right click cancels selection"; Pattern = 'selection_cancel\.store\(true,\s*Ordering::SeqCst\)' },
-  @{ Name = "selection blocks context menu"; Pattern = 'addEventListener\("contextmenu", cancelSelection\)' },
+  @{ Name = "native selector paints frozen screenshot"; Pattern = 'SetDIBitsToDevice' },
+  @{ Name = "native selector handles left drag"; Pattern = 'WM_LBUTTONDOWN[\s\S]*WM_MOUSEMOVE[\s\S]*WM_LBUTTONUP' },
+  @{ Name = "native selector right click cancels"; Pattern = 'WM_RBUTTONUP' },
   @{ Name = "small left click auto detects region"; Pattern = 'selection_auto_detect' }
 )
 
 foreach ($check in $checks) {
-  $source = "$main`n$selection`n$selectionBox`n$selectionDim`n$hotkey"
+  $source = "$main`n$nativeSelection`n$hotkey"
   if ($source -notmatch $check.Pattern) {
     throw "[FAIL] $($check.Name)"
   }
@@ -74,70 +65,40 @@ if ($tauriConfig -notmatch '"productName":\s*"OCR Translator"' -or $tauriConfig 
 }
 Write-Host "[PASS] Tauri window title/product/height updated"
 
-if ($selection -match 'background:\s*rgba\(0,\s*0,\s*0' -or $selection -match '9999px') {
-  throw "[FAIL] selection overlay still dims the whole screen and can flash in fullscreen games"
-}
-Write-Host "[PASS] selection overlay does not dim the whole screen"
-
-if ($main -match 'create_selection_window' -or $main -match 'WebviewUrl::App\("selection\.html' -or $main -match 'WebviewWindowBuilder::new\([^)]*"selection"') {
+if ($main -match 'create_selection_window' -or $main -match 'WebviewUrl::App\("selection\.html' -or $main -match 'selection-box\.html' -or $main -match 'selection-dim\.html') {
   throw "[FAIL] OCR selection still creates or shows a fullscreen webview"
 }
 Write-Host "[PASS] OCR selection does not use a fullscreen webview"
 
-if ($selectionBox -notmatch 'pointer-events:\s*none' -or $selectionBox -notmatch 'border:\s*2px solid') {
-  throw "[FAIL] selection box is not a passive small rectangle overlay"
+if ($nativeSelection -notmatch 'CreateWindowExW' -or $nativeSelection -notmatch 'WS_POPUP' -or $nativeSelection -notmatch 'WS_EX_TOPMOST' -or $nativeSelection -notmatch 'IDC_CROSS') {
+  throw "[FAIL] native OCR selector does not create a topmost popup selection window"
 }
-Write-Host "[PASS] selection box is a passive small rectangle overlay"
+Write-Host "[PASS] native OCR selector creates a topmost popup selection window"
 
-if ($selectionDim -notmatch 'background:\s*rgba\(0,\s*0,\s*0,\s*0\.22\)' -or $selectionDim -notmatch 'pointer-events:\s*auto') {
-  throw "[FAIL] OCR selection dim layer is missing or does not receive mouse input"
+if ($nativeSelection -notmatch 'SetWindowPos\(hwnd,\s*HWND_TOPMOST' -or $nativeSelection -notmatch 'BringWindowToTop\(hwnd\)' -or $nativeSelection -notmatch 'SetForegroundWindow\(hwnd\)' -or $nativeSelection -notmatch 'SetFocus\(hwnd\)') {
+  throw "[FAIL] native OCR selector does not actively bring the selection window to front"
 }
-Write-Host "[PASS] OCR selection uses a mouse-blocking dim layer"
+Write-Host "[PASS] native OCR selector actively brings the selection window to front"
 
-if ($selectionDim -notmatch 'contextmenu' -or $selectionDim -notmatch 'mousedown' -or $selectionDim -notmatch 'preventDefault\(\)' -or $main -notmatch 'set_ignore_cursor_events\(false\)') {
-  throw "[FAIL] OCR dim layer does not block background clicks like a screenshot surface"
+if ($nativeSelection -notmatch 'WM_PAINT' -or $nativeSelection -notmatch 'dim_bgra' -or $nativeSelection -notmatch 'copy_bgra_region') {
+  throw "[FAIL] native OCR selector does not paint frozen screenshot, dim layer, and clear selected region"
 }
-Write-Host "[PASS] OCR dim layer blocks background clicks like a screenshot surface"
-
-if ($selectionDim -notmatch 'id="frozenScreen"' -or $selectionDim -notmatch 'selection-dim-frame' -or $main -notmatch 'selection_dim_frame_data_url' -or $main -notmatch 'image_data_url') {
-  throw "[FAIL] OCR dim layer does not display the frozen screenshot"
-}
-Write-Host "[PASS] OCR dim layer displays the frozen screenshot"
-
-if ($main -notmatch 'fn selection_dim_frame_data_url' -or $main -notmatch 'source_x = \(x - offset_x\)\.clamp' -or $main -notmatch 'source_y = \(y - offset_y\)\.clamp' -or $selectionDim -notmatch 'width:\s*100%' -or $selectionDim -notmatch 'height:\s*100%') {
-  throw "[FAIL] OCR dim layer does not use a precomposited frozen screenshot frame"
-}
-Write-Host "[PASS] OCR dim layer uses a precomposited frozen screenshot frame"
+Write-Host "[PASS] native OCR selector paints frozen screenshot and selection mask"
 
 if ($main -notmatch 'fn hide_main_window_for_selection' -or $main -notmatch 'get_webview_window\("main"\)' -or $main -notmatch 'tokio::time::sleep\(Duration::from_millis\(90\)\)' -or $main -notmatch 'fn restore_main_window_after_selection') {
   throw "[FAIL] OCR selection does not hide and restore the main window around capture"
 }
 Write-Host "[PASS] OCR selection hides and restores the main window around capture"
 
-if ($main -notmatch 'let overscan = 24' -or $main -notmatch 'rect\.x - overscan' -or $main -notmatch 'rect\.width \+ overscan \* 2') {
-  throw "[FAIL] OCR dim layer does not overscan the virtual screen edges"
+if ($nativeSelection -notmatch 'SetCapture\(hwnd\)' -or $nativeSelection -notmatch 'ReleaseCapture\(\)' -or $nativeSelection -notmatch 'DestroyWindow\(hwnd\)') {
+  throw "[FAIL] native OCR selector does not capture and release mouse input"
 }
-Write-Host "[PASS] OCR dim layer overscans virtual screen edges"
+Write-Host "[PASS] native OCR selector captures and releases mouse input"
 
-if ($selectionBox -notmatch '拖动选择文字' -or $selectionBox -notmatch 'selection-box-mode' -or $selectionBox -notmatch 'body\.hint') {
-  throw "[FAIL] OCR selection does not show a lightweight entry hint"
+if ($main -notmatch 'capture_frozen_screen\(\)[\s\S]{0,700}select_rect_native\(selection_screen\.rect,\s*&selection_screen\.png\)') {
+  throw "[FAIL] OCR native selection can run before the frozen screenshot"
 }
-Write-Host "[PASS] OCR selection shows a lightweight entry hint"
-
-if ($selectionBox -notmatch 'pointer-events:\s*none' -or $main -notmatch 'set_ignore_cursor_events\(true\)' -or $main -notmatch 'show_selection_dim\(&app,\s*frozen_screen\.as_ref\(\)\)') {
-  throw "[FAIL] selection box visual layer can still capture mouse input"
-}
-Write-Host "[PASS] selection box visual layer ignores mouse input"
-
-if ($hotkey -notmatch 'WM_RBUTTONDOWN' -or $hotkey -notmatch 'MouseButton::Right' -or $main -notmatch 'selection_active\.load\(Ordering::SeqCst\)') {
-  throw "[FAIL] right click is not handled by the global selection cancel path"
-}
-Write-Host "[PASS] right click is handled by the global selection cancel path"
-
-if ($main -notmatch 'capture_frozen_screen\(\)[\s\S]{0,420}show_selection_dim\(&app,\s*frozen_screen\.as_ref\(\)\)') {
-  throw "[FAIL] OCR dim layer can be captured before the frozen screenshot"
-}
-Write-Host "[PASS] OCR freezes the screen before showing the dim layer"
+Write-Host "[PASS] OCR freezes the screen before native selection"
 
 if ($main -match 'OCR 失败：\{err\}' -or $main -match 'format!\("OCR 失败' -or $main -match 'show_overlay\(&app,\s*&cfg,\s*payload\.anchor,\s*String::new\(\),\s*message\)') {
   throw "[FAIL] OCR failure messages still expose internal engine/error details"
@@ -278,6 +239,11 @@ if ($manifest -notmatch 'requestedExecutionLevel level="requireAdministrator"' -
   throw "[FAIL] Windows executable does not request administrator privileges"
 }
 Write-Host "[PASS] Windows executable requests administrator privileges"
+
+if ($manifest -notmatch '<ws2016:dpiAwareness>PerMonitorV2</ws2016:dpiAwareness>') {
+  throw "[FAIL] Windows executable does not request PerMonitorV2 DPI awareness"
+}
+Write-Host "[PASS] Windows executable requests PerMonitorV2 DPI awareness"
 
 $mustNotHave = @(
   'id="ocrEngine"',

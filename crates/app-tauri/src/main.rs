@@ -5,12 +5,11 @@ use app_core::{
 };
 use app_windows::{
     available_windows_ocr_languages, capture_rect_png, cursor_position, detect_ocr_engines,
-    install_snippingtool_oneocr_runtime, left_mouse_down, preview_snippingtool_oneocr_package,
-    recognize_png_pipeline, release_cursor_lock, right_mouse_down, virtual_screen_rect,
+    install_snippingtool_oneocr_runtime, preview_snippingtool_oneocr_package,
+    recognize_png_pipeline, release_cursor_lock, select_rect_native, virtual_screen_rect,
     GlobalInputEvent, KeyboardEvent, MouseButton, OcrEngineStatus, OcrLanguageInfo,
     OcrPipelineRequest, OneOcrPackageInfo, Point, Rect,
 };
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use image::{ImageFormat, RgbaImage};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -55,11 +54,6 @@ struct SelectionPayload {
 struct FrozenScreen {
     rect: Rect,
     png: Vec<u8>,
-}
-
-#[derive(Clone, Serialize)]
-struct SelectionDimPayload {
-    image_data_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -476,77 +470,49 @@ fn start_mouse_selection(app: tauri::AppHandle) {
             state.selection_active.store(true, Ordering::SeqCst);
             state.selection_cancel.store(false, Ordering::SeqCst);
         }
-        let _ = hide_selection_box(&app);
-        let _ = hide_selection_dim(&app);
         let restore_main_window = hide_main_window_for_selection(&app);
         if restore_main_window {
             tokio::time::sleep(Duration::from_millis(90)).await;
         }
         let frozen_screen = match capture_frozen_screen() {
-            Ok(screen) => Some(screen),
+            Ok(screen) => screen,
             Err(err) => {
                 eprintln!("freeze screen failed: {err}");
-                None
+                restore_main_window_after_selection(&app, restore_main_window);
+                finish_selection_state(&app);
+                let _ = app.emit("ocr-status", "没有截到当前画面，请再试一次。");
+                return;
             }
         };
-        let _ = show_selection_dim(&app, frozen_screen.as_ref());
-        if let Ok(point) = cursor_position() {
-            let _ = show_selection_hint(&app, point);
-        }
-        while left_mouse_down() {
-            if selection_cancel_requested(&app) || right_mouse_down() {
+        let selection_screen = frozen_screen.clone();
+        let selection = tokio::task::spawn_blocking(move || {
+            select_rect_native(selection_screen.rect, &selection_screen.png)
+        })
+        .await;
+        let rect = match selection {
+            Ok(Ok(Some(rect))) => rect,
+            Ok(Ok(None)) => {
                 finish_selection_cancel(&app, restore_main_window);
                 return;
             }
-            tokio::time::sleep(Duration::from_millis(16)).await;
-        }
-        loop {
-            if selection_cancel_requested(&app) || right_mouse_down() {
-                finish_selection_cancel(&app, restore_main_window);
+            Ok(Err(err)) => {
+                restore_main_window_after_selection(&app, restore_main_window);
+                finish_selection_state(&app);
+                let _ = app.emit("ocr-status", format!("选区没有打开成功：{err}"));
                 return;
             }
-            if left_mouse_down() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(16)).await;
-        }
-        let start = match cursor_position() {
-            Ok(point) => point,
             Err(err) => {
-                let _ = app.emit("ocr-status", format!("无法读取鼠标位置：{err}"));
-                finish_selection_cancel(&app, restore_main_window);
+                restore_main_window_after_selection(&app, restore_main_window);
+                finish_selection_state(&app);
+                let _ = app.emit("ocr-status", format!("选区没有打开成功：{err}"));
                 return;
             }
         };
-        let _ = hide_selection_box(&app);
-        let mut last_rect = Rect {
-            x: start.x,
-            y: start.y,
-            width: 1,
-            height: 1,
-        };
-        while left_mouse_down() {
-            if selection_cancel_requested(&app) || right_mouse_down() {
-                finish_selection_cancel(&app, restore_main_window);
-                return;
-            }
-            if let Ok(current) = cursor_position() {
-                let rect = rect_from_points(start, current);
-                if rect != last_rect && rect.width >= 1 && rect.height >= 1 {
-                    let _ = show_selection_box(&app, rect);
-                    last_rect = rect;
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(16)).await;
-        }
-        let end = cursor_position().unwrap_or(Point {
-            x: start.x + last_rect.width,
-            y: start.y + last_rect.height,
-        });
-        let _ = hide_selection_box(&app);
-        let _ = hide_selection_dim(&app);
         finish_selection_state(&app);
-        let rect = rect_from_points(start, end);
+        let anchor = Point {
+            x: rect.x + rect.width,
+            y: rect.y + rect.height,
+        };
         let cfg = match app.state::<AppState>().config.lock().map(|cfg| cfg.clone()) {
             Ok(cfg) => cfg,
             Err(_) => {
@@ -555,22 +521,27 @@ fn start_mouse_selection(app: tauri::AppHandle) {
             }
         };
         if rect.width < 16 || rect.height < 16 {
-            match auto_detect_selection_rect(&app, end) {
+            match auto_detect_selection_rect(&app, anchor) {
                 Ok(Some(rect)) => {
                     let _ = run_pipeline(
                         app.clone(),
                         cfg,
-                        SelectionPayload { rect, anchor: end },
-                        frozen_screen,
+                        SelectionPayload { rect, anchor },
+                        Some(frozen_screen),
                     )
                     .await;
                 }
                 Ok(None) => {
-                    let _ =
-                        show_user_message(&app, &cfg, end, "没看到可识别的文字，换个区域再试试。");
+                    let _ = show_user_message(
+                        &app,
+                        &cfg,
+                        anchor,
+                        "没看到可识别的文字，换个区域再试试。",
+                    );
                 }
                 Err(_) => {
-                    let _ = show_user_message(&app, &cfg, end, "这次没有选到文字，请重新试一次。");
+                    let _ =
+                        show_user_message(&app, &cfg, anchor, "这次没有选到文字，请重新试一次。");
                 }
             }
             restore_main_window_after_selection(&app, restore_main_window);
@@ -579,18 +550,12 @@ fn start_mouse_selection(app: tauri::AppHandle) {
         let _ = run_pipeline(
             app.clone(),
             cfg,
-            SelectionPayload { rect, anchor: end },
-            frozen_screen,
+            SelectionPayload { rect, anchor },
+            Some(frozen_screen),
         )
         .await;
         restore_main_window_after_selection(&app, restore_main_window);
     });
-}
-
-fn selection_cancel_requested(app: &tauri::AppHandle) -> bool {
-    app.try_state::<AppState>()
-        .map(|state| state.selection_cancel.load(Ordering::SeqCst))
-        .unwrap_or(false)
 }
 
 fn finish_selection_state(app: &tauri::AppHandle) {
@@ -601,8 +566,6 @@ fn finish_selection_state(app: &tauri::AppHandle) {
 }
 
 fn finish_selection_cancel(app: &tauri::AppHandle, restore_main_window: bool) {
-    let _ = hide_selection_box(app);
-    let _ = hide_selection_dim(app);
     finish_selection_state(app);
     restore_main_window_after_selection(app, restore_main_window);
     let _ = app.emit("ocr-status", "已取消");
@@ -658,177 +621,6 @@ fn crop_frozen_screen_png(screen: &FrozenScreen, rect: Rect) -> anyhow::Result<V
     let mut out = Cursor::new(Vec::new());
     cropped.write_to(&mut out, ImageFormat::Png)?;
     Ok(out.into_inner())
-}
-
-fn rect_from_points(start: Point, end: Point) -> Rect {
-    Rect {
-        x: start.x.min(end.x),
-        y: start.y.min(end.y),
-        width: (start.x - end.x).abs(),
-        height: (start.y - end.y).abs(),
-    }
-}
-
-fn get_or_create_selection_box(app: &tauri::AppHandle) -> anyhow::Result<tauri::WebviewWindow> {
-    let window = if let Some(window) = app.get_webview_window("selection-box") {
-        window
-    } else {
-        WebviewWindowBuilder::new(
-            app,
-            "selection-box",
-            WebviewUrl::App("selection-box.html".into()),
-        )
-        .title("OCR 选区")
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(true)
-        .focusable(false)
-        .resizable(false)
-        .skip_taskbar(true)
-        .visible(false)
-        .inner_size(1.0, 1.0)
-        .build()?
-    };
-    let _ = window.set_ignore_cursor_events(true);
-    Ok(window)
-}
-
-fn get_or_create_selection_dim(app: &tauri::AppHandle) -> anyhow::Result<tauri::WebviewWindow> {
-    let window = if let Some(window) = app.get_webview_window("selection-dim") {
-        window
-    } else {
-        WebviewWindowBuilder::new(
-            app,
-            "selection-dim",
-            WebviewUrl::App("selection-dim.html".into()),
-        )
-        .title("OCR 暗层")
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(true)
-        .focusable(false)
-        .resizable(false)
-        .skip_taskbar(true)
-        .visible(false)
-        .inner_size(1.0, 1.0)
-        .build()?
-    };
-    let _ = window.set_ignore_cursor_events(false);
-    Ok(window)
-}
-
-fn show_selection_dim(
-    app: &tauri::AppHandle,
-    frozen_screen: Option<&FrozenScreen>,
-) -> anyhow::Result<()> {
-    let window = get_or_create_selection_dim(app)?;
-    let rect = virtual_screen_rect();
-    let overscan = 24;
-    let window_width = (rect.width + overscan * 2).max(1);
-    let window_height = (rect.height + overscan * 2).max(1);
-    window.set_position(PhysicalPosition::new(rect.x - overscan, rect.y - overscan))?;
-    window.set_size(PhysicalSize::new(window_width as u32, window_height as u32))?;
-    let payload = frozen_screen.and_then(|screen| {
-        selection_dim_frame_data_url(screen, window_width, window_height, overscan, overscan)
-            .ok()
-            .map(|image_data_url| SelectionDimPayload {
-                image_data_url: Some(image_data_url),
-            })
-    });
-    let payload = payload.unwrap_or(SelectionDimPayload {
-        image_data_url: None,
-    });
-    let _ = window.emit("selection-dim-frame", payload);
-    window.show()?;
-    Ok(())
-}
-
-fn selection_dim_frame_data_url(
-    screen: &FrozenScreen,
-    width: i32,
-    height: i32,
-    offset_x: i32,
-    offset_y: i32,
-) -> anyhow::Result<String> {
-    if width <= 0 || height <= 0 {
-        anyhow::bail!("截图层尺寸无效");
-    }
-    let source = image::load_from_memory(&screen.png)?.to_rgba8();
-    let source_width = source.width() as i32;
-    let source_height = source.height() as i32;
-    if source_width <= 0 || source_height <= 0 {
-        anyhow::bail!("冻结截图尺寸无效");
-    }
-    let mut canvas = RgbaImage::new(width as u32, height as u32);
-    for y in 0..height {
-        let source_y = (y - offset_y).clamp(0, source_height - 1) as u32;
-        for x in 0..width {
-            let source_x = (x - offset_x).clamp(0, source_width - 1) as u32;
-            canvas.put_pixel(x as u32, y as u32, *source.get_pixel(source_x, source_y));
-        }
-    }
-    let mut out = Cursor::new(Vec::new());
-    canvas.write_to(&mut out, ImageFormat::Png)?;
-    Ok(format!(
-        "data:image/png;base64,{}",
-        BASE64_STANDARD.encode(out.into_inner())
-    ))
-}
-
-fn show_selection_box(app: &tauri::AppHandle, rect: Rect) -> anyhow::Result<()> {
-    let rect = rect.normalized();
-    let window = get_or_create_selection_box(app)?;
-    let _ = window.emit("selection-box-mode", "box");
-    window.set_position(PhysicalPosition::new(rect.x, rect.y))?;
-    window.set_size(PhysicalSize::new(
-        rect.width.max(1) as u32,
-        rect.height.max(1) as u32,
-    ))?;
-    window.show()?;
-    Ok(())
-}
-
-fn show_selection_hint(app: &tauri::AppHandle, anchor: Point) -> anyhow::Result<()> {
-    let window = get_or_create_selection_box(app)?;
-    let width = 178_u32;
-    let height = 34_u32;
-    let (mut x, mut y) = (anchor.x + 14, anchor.y + 14);
-    if let Some(monitor) = app.primary_monitor()? {
-        let pos = monitor.position();
-        let size = monitor.size();
-        let margin = 8;
-        let left = pos.x + margin;
-        let top = pos.y + margin;
-        let right = pos.x + size.width as i32 - margin;
-        let bottom = pos.y + size.height as i32 - margin;
-        if x + width as i32 > right {
-            x = (anchor.x - width as i32 - 14).max(left);
-        }
-        if y + height as i32 > bottom {
-            y = (anchor.y - height as i32 - 14).max(top);
-        }
-        x = x.max(left);
-        y = y.max(top);
-    }
-    let _ = window.emit("selection-box-mode", "hint");
-    window.set_position(PhysicalPosition::new(x, y))?;
-    window.set_size(PhysicalSize::new(width, height))?;
-    window.show()?;
-    Ok(())
-}
-
-fn hide_selection_box(app: &tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("selection-box") {
-        window.hide().map_err(|err| err.to_string())?;
-    }
-    Ok(())
-}
-
-fn hide_selection_dim(app: &tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("selection-dim") {
-        window.hide().map_err(|err| err.to_string())?;
-    }
-    Ok(())
 }
 
 fn auto_detect_selection_rect(
@@ -1049,39 +841,6 @@ mod tests {
         assert!(rect.y <= 76, "{rect:?}");
         assert!(rect.width >= 120, "{rect:?}");
         assert!(rect.height >= 45, "{rect:?}");
-    }
-
-    #[test]
-    fn selection_dim_frame_matches_window_size_and_extends_edges() {
-        let mut source = RgbaImage::new(2, 2);
-        source.put_pixel(0, 0, Rgba([10, 20, 30, 255]));
-        source.put_pixel(1, 0, Rgba([40, 50, 60, 255]));
-        source.put_pixel(0, 1, Rgba([70, 80, 90, 255]));
-        source.put_pixel(1, 1, Rgba([100, 110, 120, 255]));
-        let mut png = Cursor::new(Vec::new());
-        source.write_to(&mut png, ImageFormat::Png).unwrap();
-        let screen = FrozenScreen {
-            rect: Rect {
-                x: 0,
-                y: 0,
-                width: 2,
-                height: 2,
-            },
-            png: png.into_inner(),
-        };
-
-        let data_url = selection_dim_frame_data_url(&screen, 4, 4, 1, 1).unwrap();
-        let encoded = data_url
-            .strip_prefix("data:image/png;base64,")
-            .expect("data url prefix");
-        let frame_png = BASE64_STANDARD.decode(encoded).unwrap();
-        let frame = image::load_from_memory(&frame_png).unwrap().to_rgba8();
-
-        assert_eq!(frame.dimensions(), (4, 4));
-        assert_eq!(*frame.get_pixel(0, 0), Rgba([10, 20, 30, 255]));
-        assert_eq!(*frame.get_pixel(1, 1), Rgba([10, 20, 30, 255]));
-        assert_eq!(*frame.get_pixel(2, 1), Rgba([40, 50, 60, 255]));
-        assert_eq!(*frame.get_pixel(3, 3), Rgba([100, 110, 120, 255]));
     }
 
     #[test]
@@ -1563,12 +1322,6 @@ fn main() {
                 if bundled_oneocr.is_dir() {
                     std::env::set_var("OCR_TRANSLATOR_ONEOCR_DIR", bundled_oneocr);
                 }
-            }
-            if let Err(err) = get_or_create_selection_box(app.handle()) {
-                let _ = app.emit("ocr-status", format!("选区框预加载失败：{err}"));
-            }
-            if let Err(err) = get_or_create_selection_dim(app.handle()) {
-                let _ = app.emit("ocr-status", format!("截图层预加载失败：{err}"));
             }
             let (tx, mut rx) = mpsc::unbounded_channel();
             match app_windows::GlobalInputHook::start(tx) {
