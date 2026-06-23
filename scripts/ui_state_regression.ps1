@@ -143,10 +143,20 @@ if ($main -match 'request\.width\.clamp\(160,\s*cfg\.overlay\.width') {
 }
 Write-Host "[PASS] overlay manual width is not clamped to configured width"
 
+if ($main -notmatch 'let width = default_width\.clamp\(180,\s*900\)' -or $main -match 'content_width\.clamp') {
+  throw "[FAIL] overlay initial width can still shrink below configured width"
+}
+Write-Host "[PASS] overlay initial width keeps configured width"
+
 if ($main -notmatch 'ocr_translation_blocks' -or $main -notmatch 'flush_translation_paragraph' -or $main -match 'for line in lines') {
   throw "[FAIL] OCR translation still uses visual line-by-line translation"
 }
 Write-Host "[PASS] OCR translation uses semantic paragraph blocks"
+
+if ($overlay -notmatch 'manualWidth' -or $overlay -notmatch 'blocks\.scrollHeight') {
+  throw "[FAIL] overlay manual resize state or full content height measurement is missing"
+}
+Write-Host "[PASS] overlay preserves manual width and measures full content height"
 
 if ($overlay -notmatch 'max-width:\s*100%' -or $overlay -notmatch 'box-sizing:\s*border-box') {
   throw "[FAIL] overlay text sections are not constrained to resized width"

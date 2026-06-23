@@ -21,8 +21,8 @@
       #resizeHandle {
         position: fixed;
         top: 0;
-        right: 10px;
-        width: 10px;
+        right: 8px;
+        width: 16px;
         height: 100vh;
         z-index: 20;
         cursor: ew-resize;
@@ -214,6 +214,7 @@
       let maxHeight = 620;
       let resizeFrame = 0;
       let lastResizeRequest = { width: 0, height: 0 };
+      let manualWidth = null;
       let resizing = null;
 
       function cleanDisplayText(value) {
@@ -255,6 +256,8 @@
         blocks.style.fontSize = `${payload.font_size ?? 18}px`;
         blocks.style.maxHeight = `${maxHeight}px`;
         blocks.classList.remove("scrolling");
+        manualWidth = null;
+        lastResizeRequest = { width: 0, height: 0 };
         doubleClickClose = payload.double_click_close !== false;
         draggable = payload.draggable !== false;
         blocks.classList.toggle("draggable", draggable);
@@ -293,8 +296,9 @@
           translationBlock.getBoundingClientRect().height;
         blocks.classList.toggle("scrolling", contentHeight > maxHeight + 1);
         const rect = blocks.getBoundingClientRect();
-        const width = Math.ceil(window.innerWidth || rect.width || 160);
-        const height = Math.ceil(Math.min(rect.height, maxHeight) + 2);
+        const width = Math.ceil(manualWidth ?? window.innerWidth ?? rect.width ?? 180);
+        const measuredHeight = Math.max(blocks.scrollHeight, contentHeight, rect.height);
+        const height = Math.ceil(Math.min(measuredHeight, maxHeight) + 2);
         if (
           Math.abs(lastResizeRequest.width - width) <= 1 &&
           Math.abs(lastResizeRequest.height - height) <= 1
@@ -358,6 +362,7 @@
         event.preventDefault();
         const width = Math.max(160, Math.min(1200, resizing.startWidth + event.screenX - resizing.startX));
         resizing.pendingWidth = width;
+        manualWidth = width;
         if (resizing.frame) return;
         resizing.frame = requestAnimationFrame(async () => {
           if (!resizing) return;
@@ -377,6 +382,7 @@
         if (resizing.frame) {
           cancelAnimationFrame(resizing.frame);
         }
+        manualWidth = Math.max(160, Math.min(1200, resizing.pendingWidth));
         resizing = null;
         resizeHandle.classList.remove("resizing");
         scheduleResizeToContent();

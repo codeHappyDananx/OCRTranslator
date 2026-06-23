@@ -654,6 +654,33 @@ Movement Speed increased by 50%",
         assert_eq!(blocks[3], "[Buff]");
         assert_eq!(blocks[4], "Movement Speed increased by 50%");
     }
+
+    #[test]
+    fn estimate_overlay_size_keeps_configured_width_for_wrapped_text() {
+        let (width, height) = estimate_overlay_size(
+            "[Passive Benefit]\nYou can manually trigger the\n[Vanguard] versions of [Shield\nCharge]",
+            320,
+            18,
+        );
+        assert_eq!(width, 320);
+        assert!(height >= 54);
+    }
+
+    #[test]
+    fn display_text_reflows_ocr_visual_lines() {
+        let text = ocr_display_text(
+            "[Passive Benefit]\n\
+You can manually trigger the\n\
+[Vanguard] versions of [Shield\n\
+Charge]\n\
+[Attributes]\n\
+Invulnerable while casting",
+        );
+        assert_eq!(
+            text,
+            "[Passive Benefit]\n\nYou can manually trigger the [Vanguard] versions of [Shield Charge]\n\n[Attributes]\n\nInvulnerable while casting"
+        );
+    }
 }
 
 fn clear_overlay_payload(app: &tauri::AppHandle) {
@@ -853,8 +880,9 @@ fn show_overlay(
     raw_text: String,
     text: String,
 ) -> anyhow::Result<()> {
-    let display_text = if cfg.overlay.show_source && !raw_text.trim().is_empty() {
-        format!("{raw_text}\n\n{text}")
+    let display_raw_text = ocr_display_text(&raw_text);
+    let display_text = if cfg.overlay.show_source && !display_raw_text.trim().is_empty() {
+        format!("{display_raw_text}\n\n{text}")
     } else {
         text.clone()
     };
@@ -901,7 +929,7 @@ fn show_overlay(
     };
     let payload = OverlayPayload {
         text,
-        raw_text,
+        raw_text: display_raw_text,
         opacity: cfg.overlay.opacity,
         font_size: cfg.overlay.font_size,
         max_height,
@@ -928,8 +956,7 @@ fn show_overlay(
 
 fn estimate_overlay_size(text: &str, default_width: u32, font_size: u32) -> (u32, u32) {
     let font_size = font_size.clamp(12, 48);
-    let max_width = default_width.clamp(180, 900);
-    let min_width = 160;
+    let width = default_width.clamp(180, 900);
     let horizontal_padding = 28;
     let vertical_padding = 24;
     let char_width = ((font_size as f32) * 0.62).ceil() as u32;
@@ -939,15 +966,6 @@ fn estimate_overlay_size(text: &str, default_width: u32, font_size: u32) -> (u32
     } else {
         text.lines().collect()
     };
-    let longest = lines
-        .iter()
-        .map(|line| line.chars().count() as u32)
-        .max()
-        .unwrap_or(1);
-    let content_width = longest
-        .saturating_mul(char_width)
-        .saturating_add(horizontal_padding);
-    let width = content_width.clamp(min_width, max_width);
     let chars_per_row = ((width.saturating_sub(horizontal_padding)) / char_width).max(1);
     let rows: u32 = lines
         .iter()
@@ -959,6 +977,10 @@ fn estimate_overlay_size(text: &str, default_width: u32, font_size: u32) -> (u32
         .saturating_add(vertical_padding)
         .clamp(54, 620);
     (width, height)
+}
+
+fn ocr_display_text(raw_text: &str) -> String {
+    ocr_translation_blocks(raw_text).join("\n\n")
 }
 
 fn input_matches_hotkey(hotkey: &str, event: &GlobalInputEvent) -> bool {
