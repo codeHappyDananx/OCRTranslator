@@ -63,6 +63,11 @@ struct OverlayResizeRequest {
     height: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OverlayWidthRequest {
+    width: u32,
+}
+
 #[tauri::command]
 fn get_config(state: State<'_, AppState>) -> Result<AppConfig, String> {
     state
@@ -348,6 +353,19 @@ fn resize_overlay_to_content(
         .map_err(|e| e.to_string())?;
     window
         .set_position(PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn resize_overlay_width(request: OverlayWidthRequest, app: tauri::AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("overlay") else {
+        return Ok(());
+    };
+    let size = window.outer_size().map_err(|e| e.to_string())?;
+    let width = request.width.clamp(180, 900);
+    window
+        .set_size(PhysicalSize::new(width, size.height.max(54)))
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -1123,6 +1141,7 @@ fn main() {
             close_overlay,
             start_overlay_drag,
             resize_overlay_to_content,
+            resize_overlay_width,
             get_overlay_payload,
             get_cursor_position
         ])

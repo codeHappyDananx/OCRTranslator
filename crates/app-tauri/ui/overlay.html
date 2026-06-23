@@ -219,7 +219,7 @@
       function render(payload) {
         const rawText = cleanDisplayText(payload.raw_text);
         const translatedText = cleanDisplayText(payload.text) || "无翻译结果";
-        const showSource = payload.show_source === true && !!rawText;
+        const showSource = !!rawText;
         sourceText.textContent = showSource ? rawText : "";
         sourceBlock.classList.toggle("hidden", !showSource);
         translationBlock.classList.toggle("solo", !showSource);
@@ -329,10 +329,9 @@
           if (!resizing) return;
           const requestWidth = Math.round(resizing.pendingWidth);
           resizing.frame = 0;
-          await invoke("resize_overlay_to_content", {
+          await invoke("resize_overlay_width", {
             request: {
               width: requestWidth,
-              height: Math.max(window.innerHeight || 54, 54),
             },
           }).catch(() => {});
         });

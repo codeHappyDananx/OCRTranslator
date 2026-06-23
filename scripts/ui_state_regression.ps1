@@ -36,6 +36,7 @@ $mustHave = @(
   @{ Name = "source background color picker"; Pattern = 'id="sourceBackground" type="color"' },
   @{ Name = "translation background color picker"; Pattern = 'id="translationBackground" type="color"' },
   @{ Name = "overlay content resize command"; Pattern = 'resize_overlay_to_content' },
+  @{ Name = "overlay width resize command"; Pattern = 'resize_overlay_width' },
   @{ Name = "overlay drag command"; Pattern = 'start_overlay_drag' },
   @{ Name = "settings autosave function"; Pattern = 'function scheduleSave' },
   @{ Name = "show source participates in autosave"; Pattern = 'els\.showSource' }
@@ -153,10 +154,15 @@ if ($main -notmatch 'ocr_translation_blocks' -or $main -notmatch 'flush_translat
 }
 Write-Host "[PASS] OCR translation uses semantic paragraph blocks"
 
-if ($overlay -notmatch 'manualWidth' -or $overlay -notmatch 'blocks\.scrollHeight') {
+if ($overlay -notmatch 'manualWidth' -or $overlay -notmatch 'blocks\.scrollHeight' -or $overlay -notmatch 'resize_overlay_width') {
   throw "[FAIL] overlay manual resize state or full content height measurement is missing"
 }
 Write-Host "[PASS] overlay preserves manual width and measures full content height"
+
+if ($overlay -match 'pointermove[\s\S]{0,900}resize_overlay_to_content' -or $overlay -match 'resize_overlay_width[\s\S]{0,240}height:') {
+  throw "[FAIL] overlay width drag still changes content height during pointer move"
+}
+Write-Host "[PASS] overlay width drag does not change content height"
 
 if ($overlay -notmatch 'max-width:\s*100%' -or $overlay -notmatch 'box-sizing:\s*border-box') {
   throw "[FAIL] overlay text sections are not constrained to resized width"
