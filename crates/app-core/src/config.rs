@@ -10,7 +10,19 @@ pub struct AppConfig {
     pub translator: String,
     pub hotkey: String,
     pub provider_settings: HashMap<String, HashMap<String, String>>,
+    #[serde(default)]
+    pub app: AppBehaviorConfig,
     pub overlay: OverlayConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppBehaviorConfig {
+    #[serde(default)]
+    pub close_to_tray: bool,
+    #[serde(default = "default_ask_before_close")]
+    pub ask_before_close: bool,
+    #[serde(default)]
+    pub auto_elevate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -44,7 +56,18 @@ impl Default for AppConfig {
             translator: "bing".to_string(),
             hotkey: "MouseX1".to_string(),
             provider_settings: HashMap::new(),
+            app: AppBehaviorConfig::default(),
             overlay: OverlayConfig::default(),
+        }
+    }
+}
+
+impl Default for AppBehaviorConfig {
+    fn default() -> Self {
+        Self {
+            close_to_tray: false,
+            ask_before_close: default_ask_before_close(),
+            auto_elevate: false,
         }
     }
 }
@@ -75,6 +98,10 @@ fn default_overlay_draggable() -> bool {
 
 fn default_overlay_max_height() -> u32 {
     620
+}
+
+fn default_ask_before_close() -> bool {
+    true
 }
 
 fn default_source_background() -> String {
@@ -120,11 +147,15 @@ impl AppConfig {
             || !text.contains("\"max_height\"")
             || !text.contains("\"source_background\"")
             || !text.contains("\"translation_background\"");
+        let missing_app_fields = !text.contains("\"app\"")
+            || !text.contains("\"close_to_tray\"")
+            || !text.contains("\"ask_before_close\"")
+            || !text.contains("\"auto_elevate\"");
         let mut cfg: Self = serde_json::from_str(&text)
             .with_context(|| format!("解析配置失败：{}", path.display()))?;
         let before = cfg.clone();
         cfg.normalize();
-        if missing_overlay_fields || cfg.normalized_differs_from(&before) {
+        if missing_overlay_fields || missing_app_fields || cfg.normalized_differs_from(&before) {
             cfg.save()?;
         }
         Ok(cfg)
@@ -165,6 +196,7 @@ impl AppConfig {
             || self.translator != other.translator
             || self.hotkey != other.hotkey
             || self.provider_settings != other.provider_settings
+            || self.app != other.app
             || self.overlay != other.overlay
     }
 }

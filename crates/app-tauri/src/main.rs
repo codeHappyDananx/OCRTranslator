@@ -14,7 +14,9 @@ use app_windows::{
 use image::{ImageFormat, RgbaImage};
 use serde::{Deserialize, Serialize};
 use std::{
+    ffi::OsStr,
     io::Cursor,
+    os::windows::ffi::OsStrExt,
     sync::{
         atomic::{AtomicBool, Ordering},
         Mutex,
@@ -22,15 +24,42 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{
+    menu::{MenuBuilder, MenuItemBuilder},
+    tray::{MouseButton as TrayMouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl, WebviewWindowBuilder,
+    WindowEvent,
 };
 use tokio::sync::mpsc;
+use windows::{
+    core::{w, PCWSTR},
+    Win32::{
+        Foundation::HWND,
+        UI::{
+            Shell::{IsUserAnAdmin, ShellExecuteW},
+            WindowsAndMessaging::SW_SHOWNORMAL,
+        },
+    },
+};
 
 struct AppState {
     config: Mutex<AppConfig>,
     last_overlay: Mutex<Option<OverlayPayload>>,
     selection_active: AtomicBool,
     selection_cancel: AtomicBool,
+    exiting: AtomicBool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CloseChoice {
+    Tray,
+    Exit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CloseChoiceRequest {
+    choice: CloseChoice,
+    dont_ask_again: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,6 +124,43 @@ fn save_config(
     *guard = config.clone();
     refresh_overlay_settings(&app, &config);
     Ok(())
+}
+
+#[tauri::command]
+fn handle_close_choice(
+    request: CloseChoiceRequest,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    match request.choice {
+        CloseChoice::Tray => {
+            if request.dont_ask_again {
+                let mut config = state
+                    .config
+                    .lock()
+                    .map_err(|e| format!("写入配置锁失败：{e}"))?;
+                config.app.close_to_tray = true;
+                config.app.ask_before_close = false;
+                config.save().map_err(|e| e.to_string())?;
+            }
+            hide_main_window(&app)?;
+        }
+        CloseChoice::Exit => {
+            exit_application(&app, &state);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    exit_application(&app, &state);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_admin_status() -> bool {
+    is_running_as_admin()
 }
 
 #[tauri::command]
@@ -441,6 +507,21 @@ fn cleanup_selection_layers(app: &tauri::AppHandle) {
     }
 }
 
+fn hide_main_window(app: &tauri::AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    window.hide().map_err(|e| e.to_string())
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 fn hide_main_window_for_selection(app: &tauri::AppHandle) -> bool {
     let Some(window) = app.get_webview_window("main") else {
         return false;
@@ -458,6 +539,53 @@ fn restore_main_window_after_selection(app: &tauri::AppHandle, restore: bool) {
     }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
+    }
+}
+
+fn cleanup_runtime_windows(app: &tauri::AppHandle) {
+    cleanup_selection_layers(app);
+    let _ = release_cursor_lock();
+    if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.hide();
+        let _ = window.close();
+    }
+    clear_overlay_payload(app);
+}
+
+fn exit_application(app: &tauri::AppHandle, state: &AppState) {
+    state.exiting.store(true, Ordering::SeqCst);
+    state.selection_active.store(false, Ordering::SeqCst);
+    state.selection_cancel.store(true, Ordering::SeqCst);
+    cleanup_runtime_windows(app);
+    if let Some(hook) = app.try_state::<Mutex<Option<app_windows::GlobalInputHook>>>() {
+        if let Ok(mut hook) = hook.lock() {
+            *hook = None;
+        }
+    }
+    app.exit(0);
+}
+
+fn maybe_handle_main_close(app: &tauri::AppHandle, api: &tauri::CloseRequestApi) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    if state.exiting.load(Ordering::SeqCst) {
+        return;
+    }
+    api.prevent_close();
+    let cfg = state.config.lock().map(|cfg| cfg.clone());
+    let Ok(cfg) = cfg else {
+        let _ = app.emit("main-close-requested", ());
+        return;
+    };
+    if !cfg.app.ask_before_close {
+        if cfg.app.close_to_tray {
+            let _ = hide_main_window(app);
+        } else {
+            exit_application(app, &state);
+        }
+    } else {
+        let _ = app.emit("main-close-requested", ());
     }
 }
 
@@ -1210,17 +1338,92 @@ fn key_name_to_vk(key: &str) -> Option<u32> {
     }
 }
 
+fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    let open_item = MenuItemBuilder::with_id("tray_open", "打开").build(app)?;
+    let exit_item = MenuItemBuilder::with_id("tray_exit", "退出").build(app)?;
+    let menu = MenuBuilder::new(app)
+        .item(&open_item)
+        .item(&exit_item)
+        .build()?;
+    let mut builder = TrayIconBuilder::with_id("main-tray")
+        .tooltip("OCR Translator")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "tray_open" => show_main_window(app),
+            "tray_exit" => {
+                let state = app.state::<AppState>();
+                exit_application(app, &state);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: TrayMouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon().cloned() {
+        builder = builder.icon(icon);
+    }
+    builder.build(app)?;
+    Ok(())
+}
+
+fn maybe_relaunch_as_admin(cfg: &AppConfig) {
+    if !cfg.app.auto_elevate || is_running_as_admin() {
+        return;
+    }
+    if relaunch_as_admin().is_ok() {
+        std::process::exit(0);
+    }
+}
+
+fn is_running_as_admin() -> bool {
+    unsafe { IsUserAnAdmin().as_bool() }
+}
+
+fn relaunch_as_admin() -> anyhow::Result<()> {
+    let exe = std::env::current_exe()?;
+    let exe = wide_null(exe.as_os_str());
+    let result = unsafe {
+        ShellExecuteW(
+            HWND(std::ptr::null_mut()),
+            w!("runas"),
+            PCWSTR(exe.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if result.0 as isize <= 32 {
+        anyhow::bail!("请求管理员权限被取消或失败");
+    }
+    Ok(())
+}
+
+fn wide_null(value: &OsStr) -> Vec<u16> {
+    value.encode_wide().chain(std::iter::once(0)).collect()
+}
+
 fn main() {
     let mut config = AppConfig::load().unwrap_or_default();
     config.normalize();
+    maybe_relaunch_as_admin(&config);
     tauri::Builder::default()
         .manage(AppState {
             config: Mutex::new(config),
             last_overlay: Mutex::new(None),
             selection_active: AtomicBool::new(false),
             selection_cancel: AtomicBool::new(false),
+            exiting: AtomicBool::new(false),
         })
         .setup(|app| {
+            setup_tray(app)?;
             if let Ok(resource_dir) = app.path().resource_dir() {
                 let bundled_oneocr = resource_dir.join("SnippingTool");
                 if bundled_oneocr.is_dir() {
@@ -1267,9 +1470,19 @@ fn main() {
             });
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    maybe_handle_main_close(window.app_handle(), api);
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_config,
             save_config,
+            handle_close_choice,
+            exit_app,
+            get_admin_status,
             list_providers,
             list_ocr_languages,
             list_ocr_engines,

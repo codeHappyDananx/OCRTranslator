@@ -34,6 +34,12 @@ type OverlayConfig = {
   translation_background: string;
 };
 
+type AppBehaviorConfig = {
+  close_to_tray: boolean;
+  ask_before_close: boolean;
+  auto_elevate: boolean;
+};
+
 type AppConfig = {
   source_lang: string;
   target_lang: string;
@@ -41,7 +47,14 @@ type AppConfig = {
   translator: string;
   hotkey: string;
   provider_settings: Record<string, Record<string, string>>;
+  app: AppBehaviorConfig;
   overlay: OverlayConfig;
+};
+
+const defaultAppBehavior: AppBehaviorConfig = {
+  close_to_tray: false,
+  ask_before_close: true,
+  auto_elevate: false,
 };
 
 const defaultOverlay: OverlayConfig = {
@@ -89,6 +102,9 @@ function SettingsApp() {
   const [providers, setProviders] = React.useState<ProviderInfo[]>([]);
   const [status, setStatus] = React.useState("");
   const [recordingHotkey, setRecordingHotkey] = React.useState(false);
+  const [closePromptVisible, setClosePromptVisible] = React.useState(false);
+  const [closeDontAsk, setCloseDontAsk] = React.useState(false);
+  const [isAdmin, setIsAdmin] = React.useState(false);
   const saveTimer = React.useRef<number | null>(null);
 
   const implementedProviders = React.useMemo(
@@ -144,7 +160,9 @@ function SettingsApp() {
         setStatus(`OCR：OneOCR 准备失败，${String(error)}`);
       }
       const loaded = await invoke<AppConfig>("get_config");
+      const admin = await invoke<boolean>("get_admin_status").catch(() => false);
       if (cancelled) return;
+      setIsAdmin(admin);
       const fallbackProvider =
         providerList.find((provider) => provider.id === "bing") ??
         providerList.find((provider) => provider.implemented && !provider.experimental);
@@ -154,6 +172,7 @@ function SettingsApp() {
           providerList.find((provider) => provider.id === loaded.translator && provider.implemented)
             ?.id ?? fallbackProvider?.id ?? "bing",
         ocr_engine: "snippingtool",
+        app: { ...defaultAppBehavior, ...loaded.app },
         overlay: { ...defaultOverlay, ...loaded.overlay },
       });
     }
@@ -162,6 +181,10 @@ function SettingsApp() {
     });
     listen<string>("ocr-status", (event) => setStatus(event.payload)).catch(() => {});
     listen("ocr-hotkey", () => setStatus("快捷键已触发，正在选择 OCR 区域...")).catch(() => {});
+    listen("main-close-requested", () => {
+      setCloseDontAsk(false);
+      setClosePromptVisible(true);
+    }).catch(() => {});
     return () => {
       cancelled = true;
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
@@ -207,6 +230,23 @@ function SettingsApp() {
       ...current,
       overlay: { ...current.overlay, ...patch },
     }));
+
+  const setAppBehavior = (patch: Partial<AppBehaviorConfig>) =>
+    updateConfig((current) => ({
+      ...current,
+      app: { ...current.app, ...patch },
+    }));
+
+  async function chooseClose(choice: "tray" | "exit") {
+    setClosePromptVisible(false);
+    try {
+      await invoke("handle_close_choice", {
+        request: { choice, dont_ask_again: choice === "tray" && closeDontAsk },
+      });
+    } catch (error) {
+      setStatus(String(error));
+    }
+  }
 
   return (
     <main className="shell">
@@ -262,6 +302,33 @@ function SettingsApp() {
             />
           </label>
           <div className="hint">OCR：SnippingTool OneOCR</div>
+          <label className="field check">
+            <input
+              type="checkbox"
+              checked={config.app.close_to_tray}
+              onChange={(event) => setAppBehavior({ close_to_tray: event.target.checked })}
+            />
+            关闭主窗口时收起到托盘
+          </label>
+          <label className="field check">
+            <input
+              type="checkbox"
+              checked={config.app.ask_before_close}
+              onChange={(event) => setAppBehavior({ ask_before_close: event.target.checked })}
+            />
+            关闭前询问
+          </label>
+          <label className="field check">
+            <input
+              type="checkbox"
+              checked={config.app.auto_elevate}
+              onChange={(event) => setAppBehavior({ auto_elevate: event.target.checked })}
+            />
+            启动时自动以管理员权限运行
+          </label>
+          <div className="hint">
+            当前权限：{isAdmin ? "管理员" : "普通用户"}。自动管理员会在下次启动时生效。
+          </div>
         </article>
 
         <article className="panel">
@@ -412,6 +479,30 @@ function SettingsApp() {
         </article>
       </section>
       <div className="status footer-status">{status}</div>
+      {closePromptVisible ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <section className="close-dialog">
+            <h2>关闭 OCR Translator？</h2>
+            <p>可以收起到系统托盘继续使用快捷键，也可以直接退出程序。</p>
+            <label className="field check close-check">
+              <input
+                type="checkbox"
+                checked={closeDontAsk}
+                onChange={(event) => setCloseDontAsk(event.target.checked)}
+              />
+              不再提示，之后关闭时直接收起到托盘
+            </label>
+            <div className="dialog-actions">
+              <button type="button" className="secondary-button" onClick={() => chooseClose("exit")}>
+                退出程序
+              </button>
+              <button type="button" className="primary-button" onClick={() => chooseClose("tray")}>
+                收起到托盘
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }

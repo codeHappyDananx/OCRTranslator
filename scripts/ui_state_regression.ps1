@@ -42,7 +42,11 @@ $checks = @(
   @{ Name = "selection state cleared"; Source = $main; Pattern = 'selection_active\.store\(false[\s\S]*selection_cancel\.store\(false' },
   @{ Name = "hotkey capture input"; Source = $settings; Pattern = '请按键或鼠标侧键' },
   @{ Name = "OCR translation uses semantic paragraph blocks"; Source = $main; Pattern = 'ocr_translation_blocks[\s\S]*flush_translation_paragraph' },
-  @{ Name = "Windows executable requests admin"; Source = "$manifest`n$buildScript"; Pattern = 'requestedExecutionLevel level="requireAdministrator"[\s\S]*embed_resource::compile\("app\.manifest\.rc"' },
+  @{ Name = "Windows executable starts normally"; Source = "$manifest`n$buildScript"; Pattern = 'requestedExecutionLevel level="asInvoker"[\s\S]*embed_resource::compile\("app\.manifest\.rc"' },
+  @{ Name = "admin mode is config driven"; Source = "$main`n$config`n$settings"; Pattern = 'auto_elevate[\s\S]*ShellExecuteW[\s\S]*启动时自动以管理员权限运行' },
+  @{ Name = "main close prompt wired"; Source = "$main`n$settings"; Pattern = 'main-close-requested[\s\S]*handle_close_choice' },
+  @{ Name = "tray open and exit wired"; Source = $main; Pattern = 'TrayIconBuilder[\s\S]*tray_open[\s\S]*tray_exit' },
+  @{ Name = "exit cleanup closes overlay and selection"; Source = $main; Pattern = 'fn exit_application[\s\S]*cleanup_runtime_windows[\s\S]*app\.exit\(0\)' },
   @{ Name = "Windows executable requests PerMonitorV2"; Source = $manifest; Pattern = '<ws2016:dpiAwareness>PerMonitorV2</ws2016:dpiAwareness>' }
 )
 
