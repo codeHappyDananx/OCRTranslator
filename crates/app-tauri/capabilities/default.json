@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default permissions for OCR Translator local windows.",
-  "windows": ["main", "selection", "selection-box", "overlay"],
+  "windows": ["main", "selection", "selection-box", "selection-dim", "overlay"],
   "permissions": [
     "core:default",
     "core:event:default",

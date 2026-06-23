@@ -462,6 +462,7 @@ fn start_selection_window(app: &tauri::AppHandle, _cfg: &AppConfig) -> anyhow::R
 fn start_mouse_selection(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let _ = hide_selection_box(&app);
+        let _ = hide_selection_dim(&app);
         let frozen_screen = match capture_frozen_screen() {
             Ok(screen) => Some(screen),
             Err(err) => {
@@ -469,8 +470,14 @@ fn start_mouse_selection(app: tauri::AppHandle) {
                 None
             }
         };
+        let _ = show_selection_dim(&app);
+        if let Ok(point) = cursor_position() {
+            let _ = show_selection_hint(&app, point);
+        }
         while left_mouse_down() {
             if right_mouse_down() {
+                let _ = hide_selection_box(&app);
+                let _ = hide_selection_dim(&app);
                 let _ = app.emit("ocr-status", "已取消");
                 return;
             }
@@ -480,6 +487,7 @@ fn start_mouse_selection(app: tauri::AppHandle) {
             if right_mouse_down() {
                 let _ = app.emit("ocr-status", "已取消");
                 let _ = hide_selection_box(&app);
+                let _ = hide_selection_dim(&app);
                 return;
             }
             if left_mouse_down() {
@@ -494,6 +502,7 @@ fn start_mouse_selection(app: tauri::AppHandle) {
                 return;
             }
         };
+        let _ = hide_selection_box(&app);
         let mut last_rect = Rect {
             x: start.x,
             y: start.y,
@@ -503,6 +512,7 @@ fn start_mouse_selection(app: tauri::AppHandle) {
         while left_mouse_down() {
             if right_mouse_down() {
                 let _ = hide_selection_box(&app);
+                let _ = hide_selection_dim(&app);
                 let _ = app.emit("ocr-status", "已取消");
                 return;
             }
@@ -520,6 +530,7 @@ fn start_mouse_selection(app: tauri::AppHandle) {
             y: start.y + last_rect.height,
         });
         let _ = hide_selection_box(&app);
+        let _ = hide_selection_dim(&app);
         let rect = rect_from_points(start, end);
         let cfg = match app.state::<AppState>().config.lock().map(|cfg| cfg.clone()) {
             Ok(cfg) => cfg,
@@ -621,9 +632,33 @@ fn get_or_create_selection_box(app: &tauri::AppHandle) -> anyhow::Result<tauri::
     Ok(window)
 }
 
-fn show_selection_box(app: &tauri::AppHandle, rect: Rect) -> anyhow::Result<()> {
-    let rect = rect.normalized();
-    let window = get_or_create_selection_box(app)?;
+fn get_or_create_selection_dim(app: &tauri::AppHandle) -> anyhow::Result<tauri::WebviewWindow> {
+    let window = if let Some(window) = app.get_webview_window("selection-dim") {
+        window
+    } else {
+        WebviewWindowBuilder::new(
+            app,
+            "selection-dim",
+            WebviewUrl::App("selection-dim.html".into()),
+        )
+        .title("OCR 暗层")
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .focusable(false)
+        .resizable(false)
+        .skip_taskbar(true)
+        .visible(false)
+        .inner_size(1.0, 1.0)
+        .build()?
+    };
+    let _ = window.set_ignore_cursor_events(true);
+    Ok(window)
+}
+
+fn show_selection_dim(app: &tauri::AppHandle) -> anyhow::Result<()> {
+    let window = get_or_create_selection_dim(app)?;
+    let rect = virtual_screen_rect();
     window.set_position(PhysicalPosition::new(rect.x, rect.y))?;
     window.set_size(PhysicalSize::new(
         rect.width.max(1) as u32,
@@ -633,8 +668,57 @@ fn show_selection_box(app: &tauri::AppHandle, rect: Rect) -> anyhow::Result<()> 
     Ok(())
 }
 
+fn show_selection_box(app: &tauri::AppHandle, rect: Rect) -> anyhow::Result<()> {
+    let rect = rect.normalized();
+    let window = get_or_create_selection_box(app)?;
+    let _ = window.emit("selection-box-mode", "box");
+    window.set_position(PhysicalPosition::new(rect.x, rect.y))?;
+    window.set_size(PhysicalSize::new(
+        rect.width.max(1) as u32,
+        rect.height.max(1) as u32,
+    ))?;
+    window.show()?;
+    Ok(())
+}
+
+fn show_selection_hint(app: &tauri::AppHandle, anchor: Point) -> anyhow::Result<()> {
+    let window = get_or_create_selection_box(app)?;
+    let width = 178_u32;
+    let height = 34_u32;
+    let (mut x, mut y) = (anchor.x + 14, anchor.y + 14);
+    if let Some(monitor) = app.primary_monitor()? {
+        let pos = monitor.position();
+        let size = monitor.size();
+        let margin = 8;
+        let left = pos.x + margin;
+        let top = pos.y + margin;
+        let right = pos.x + size.width as i32 - margin;
+        let bottom = pos.y + size.height as i32 - margin;
+        if x + width as i32 > right {
+            x = (anchor.x - width as i32 - 14).max(left);
+        }
+        if y + height as i32 > bottom {
+            y = (anchor.y - height as i32 - 14).max(top);
+        }
+        x = x.max(left);
+        y = y.max(top);
+    }
+    let _ = window.emit("selection-box-mode", "hint");
+    window.set_position(PhysicalPosition::new(x, y))?;
+    window.set_size(PhysicalSize::new(width, height))?;
+    window.show()?;
+    Ok(())
+}
+
 fn hide_selection_box(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("selection-box") {
+        window.hide().map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+fn hide_selection_dim(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("selection-dim") {
         window.hide().map_err(|err| err.to_string())?;
     }
     Ok(())

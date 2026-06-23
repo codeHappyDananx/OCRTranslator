@@ -4,6 +4,7 @@ $ProjectRoot = "F:\AI\dn-ocr-translator"
 $main = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\src\main.rs") -Raw
 $selection = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\selection.html") -Raw
 $selectionBox = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\selection-box.html") -Raw
+$selectionDim = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\selection-dim.html") -Raw
 $index = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\index.html") -Raw
 $ui = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\main.js") -Raw
 $overlay = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\ui\overlay.html") -Raw
@@ -18,6 +19,8 @@ $checks = @(
   @{ Name = "mouse selection mode"; Pattern = 'start_mouse_selection\(app\.clone\(\)\)' },
   @{ Name = "selection uses left mouse polling"; Pattern = 'left_mouse_down\(\)' },
   @{ Name = "selection uses small box window"; Pattern = 'selection-box\.html' },
+  @{ Name = "selection uses fullscreen dim window"; Pattern = 'selection-dim\.html' },
+  @{ Name = "selection shows entry hint"; Pattern = 'show_selection_hint' },
   @{ Name = "selection freezes screen before dragging"; Pattern = 'capture_frozen_screen\(\)' },
   @{ Name = "OCR crops frozen screen after selection"; Pattern = 'crop_frozen_screen_png' },
   @{ Name = "selection listens reset"; Pattern = 'listen\("selection-reset", resetSelection\)' },
@@ -29,7 +32,7 @@ $checks = @(
 )
 
 foreach ($check in $checks) {
-  $source = "$main`n$selection`n$selectionBox"
+  $source = "$main`n$selection`n$selectionBox`n$selectionDim"
   if ($source -notmatch $check.Pattern) {
     throw "[FAIL] $($check.Name)"
   }
@@ -83,10 +86,25 @@ if ($selectionBox -notmatch 'pointer-events:\s*none' -or $selectionBox -notmatch
 }
 Write-Host "[PASS] selection box is a passive small rectangle overlay"
 
-if ($main -notmatch 'set_ignore_cursor_events\(true\)') {
+if ($selectionDim -notmatch 'background:\s*rgba\(0,\s*0,\s*0,\s*0\.22\)' -or $selectionDim -notmatch 'pointer-events:\s*none') {
+  throw "[FAIL] OCR selection dim layer is missing or can capture mouse input"
+}
+Write-Host "[PASS] OCR selection uses a click-through dim layer"
+
+if ($selectionBox -notmatch '拖动选择文字' -or $selectionBox -notmatch 'selection-box-mode' -or $selectionBox -notmatch 'body\.hint') {
+  throw "[FAIL] OCR selection does not show a lightweight entry hint"
+}
+Write-Host "[PASS] OCR selection shows a lightweight entry hint"
+
+if ($main -notmatch 'set_ignore_cursor_events\(true\)' -or $main -notmatch 'show_selection_dim\(&app\)') {
   throw "[FAIL] selection box can still capture mouse input"
 }
 Write-Host "[PASS] selection box ignores mouse input"
+
+if ($main -notmatch 'capture_frozen_screen\(\)[\s\S]{0,360}show_selection_dim\(&app\)') {
+  throw "[FAIL] OCR dim layer can be captured before the frozen screenshot"
+}
+Write-Host "[PASS] OCR freezes the screen before showing the dim layer"
 
 if ($main -match 'OCR 失败：\{err\}' -or $main -match 'format!\("OCR 失败' -or $main -match 'show_overlay\(&app,\s*&cfg,\s*payload\.anchor,\s*String::new\(\),\s*message\)') {
   throw "[FAIL] OCR failure messages still expose internal engine/error details"
