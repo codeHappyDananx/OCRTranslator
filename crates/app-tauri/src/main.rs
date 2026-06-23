@@ -10,6 +10,7 @@ use app_windows::{
     GlobalInputEvent, KeyboardEvent, MouseButton, OcrEngineStatus, OcrLanguageInfo,
     OcrPipelineRequest, OneOcrPackageInfo, Point, Rect,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use image::{ImageFormat, RgbaImage};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -54,6 +55,15 @@ struct SelectionPayload {
 struct FrozenScreen {
     rect: Rect,
     png: Vec<u8>,
+}
+
+#[derive(Clone, Serialize)]
+struct SelectionDimPayload {
+    image_data_url: Option<String>,
+    image_width: i32,
+    image_height: i32,
+    offset_x: i32,
+    offset_y: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -479,7 +489,7 @@ fn start_mouse_selection(app: tauri::AppHandle) {
                 None
             }
         };
-        let _ = show_selection_dim(&app);
+        let _ = show_selection_dim(&app, frozen_screen.as_ref());
         if let Ok(point) = cursor_position() {
             let _ = show_selection_hint(&app, point);
         }
@@ -677,11 +687,14 @@ fn get_or_create_selection_dim(app: &tauri::AppHandle) -> anyhow::Result<tauri::
         .inner_size(1.0, 1.0)
         .build()?
     };
-    let _ = window.set_ignore_cursor_events(true);
+    let _ = window.set_ignore_cursor_events(false);
     Ok(window)
 }
 
-fn show_selection_dim(app: &tauri::AppHandle) -> anyhow::Result<()> {
+fn show_selection_dim(
+    app: &tauri::AppHandle,
+    frozen_screen: Option<&FrozenScreen>,
+) -> anyhow::Result<()> {
     let window = get_or_create_selection_dim(app)?;
     let rect = virtual_screen_rect();
     let overscan = 24;
@@ -690,6 +703,24 @@ fn show_selection_dim(app: &tauri::AppHandle) -> anyhow::Result<()> {
         (rect.width + overscan * 2).max(1) as u32,
         (rect.height + overscan * 2).max(1) as u32,
     ))?;
+    let payload = frozen_screen.map(|screen| SelectionDimPayload {
+        image_data_url: Some(format!(
+            "data:image/png;base64,{}",
+            BASE64_STANDARD.encode(&screen.png)
+        )),
+        image_width: screen.rect.width,
+        image_height: screen.rect.height,
+        offset_x: screen.rect.x - (rect.x - overscan),
+        offset_y: screen.rect.y - (rect.y - overscan),
+    });
+    let payload = payload.unwrap_or(SelectionDimPayload {
+        image_data_url: None,
+        image_width: rect.width,
+        image_height: rect.height,
+        offset_x: overscan,
+        offset_y: overscan,
+    });
+    let _ = window.emit("selection-dim-frame", payload);
     window.show()?;
     Ok(())
 }
@@ -1452,6 +1483,9 @@ fn main() {
             }
             if let Err(err) = get_or_create_selection_box(app.handle()) {
                 let _ = app.emit("ocr-status", format!("选区框预加载失败：{err}"));
+            }
+            if let Err(err) = get_or_create_selection_dim(app.handle()) {
+                let _ = app.emit("ocr-status", format!("截图层预加载失败：{err}"));
             }
             let (tx, mut rx) = mpsc::unbounded_channel();
             match app_windows::GlobalInputHook::start(tx) {

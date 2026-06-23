@@ -11,11 +11,60 @@
         height: 100%;
         margin: 0;
         overflow: hidden;
-        background: rgba(0, 0, 0, 0.22);
+        background: transparent;
+        pointer-events: auto;
+        user-select: none;
+      }
+      #frozenScreen,
+      #shade {
+        position: fixed;
         pointer-events: none;
         user-select: none;
       }
+      #frozenScreen {
+        left: 0;
+        top: 0;
+        width: 1px;
+        height: 1px;
+        object-fit: fill;
+      }
+      #shade {
+        inset: 0;
+        background: rgba(0, 0, 0, 0.22);
+      }
     </style>
   </head>
-  <body></body>
+  <body>
+    <img id="frozenScreen" alt="" />
+    <div id="shade"></div>
+    <script>
+      const listen = (...args) => window.__TAURI__.event.listen(...args);
+      const frozenScreen = document.getElementById("frozenScreen");
+      listen("selection-dim-frame", (event) => {
+        const payload = event.payload || {};
+        if (!payload.image_data_url) {
+          frozenScreen.removeAttribute("src");
+          frozenScreen.style.width = "1px";
+          frozenScreen.style.height = "1px";
+          return;
+        }
+        frozenScreen.src = payload.image_data_url;
+        frozenScreen.style.left = `${payload.offset_x || 0}px`;
+        frozenScreen.style.top = `${payload.offset_y || 0}px`;
+        frozenScreen.style.width = `${payload.image_width || 1}px`;
+        frozenScreen.style.height = `${payload.image_height || 1}px`;
+      });
+      for (const eventName of [
+        "contextmenu",
+        "mousedown",
+        "mouseup",
+        "click",
+        "dblclick",
+      ]) {
+        window.addEventListener(eventName, (event) => {
+          event.preventDefault();
+        });
+      }
+    </script>
+  </body>
 </html>

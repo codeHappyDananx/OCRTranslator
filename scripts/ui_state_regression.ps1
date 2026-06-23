@@ -88,10 +88,20 @@ if ($selectionBox -notmatch 'pointer-events:\s*none' -or $selectionBox -notmatch
 }
 Write-Host "[PASS] selection box is a passive small rectangle overlay"
 
-if ($selectionDim -notmatch 'background:\s*rgba\(0,\s*0,\s*0,\s*0\.22\)' -or $selectionDim -notmatch 'pointer-events:\s*none') {
-  throw "[FAIL] OCR selection dim layer is missing or can capture mouse input"
+if ($selectionDim -notmatch 'background:\s*rgba\(0,\s*0,\s*0,\s*0\.22\)' -or $selectionDim -notmatch 'pointer-events:\s*auto') {
+  throw "[FAIL] OCR selection dim layer is missing or does not receive mouse input"
 }
-Write-Host "[PASS] OCR selection uses a click-through dim layer"
+Write-Host "[PASS] OCR selection uses a mouse-blocking dim layer"
+
+if ($selectionDim -notmatch 'contextmenu' -or $selectionDim -notmatch 'mousedown' -or $selectionDim -notmatch 'preventDefault\(\)' -or $main -notmatch 'set_ignore_cursor_events\(false\)') {
+  throw "[FAIL] OCR dim layer does not block background clicks like a screenshot surface"
+}
+Write-Host "[PASS] OCR dim layer blocks background clicks like a screenshot surface"
+
+if ($selectionDim -notmatch 'id="frozenScreen"' -or $selectionDim -notmatch 'selection-dim-frame' -or $main -notmatch 'BASE64_STANDARD\.encode\(&screen\.png\)' -or $main -notmatch 'image_data_url') {
+  throw "[FAIL] OCR dim layer does not display the frozen screenshot"
+}
+Write-Host "[PASS] OCR dim layer displays the frozen screenshot"
 
 if ($main -notmatch 'let overscan = 24' -or $main -notmatch 'rect\.x - overscan' -or $main -notmatch 'rect\.width \+ overscan \* 2') {
   throw "[FAIL] OCR dim layer does not overscan the virtual screen edges"
@@ -103,17 +113,17 @@ if ($selectionBox -notmatch '拖动选择文字' -or $selectionBox -notmatch 'se
 }
 Write-Host "[PASS] OCR selection shows a lightweight entry hint"
 
-if ($main -notmatch 'set_ignore_cursor_events\(true\)' -or $main -notmatch 'show_selection_dim\(&app\)') {
-  throw "[FAIL] selection box can still capture mouse input"
+if ($selectionBox -notmatch 'pointer-events:\s*none' -or $main -notmatch 'set_ignore_cursor_events\(true\)' -or $main -notmatch 'show_selection_dim\(&app,\s*frozen_screen\.as_ref\(\)\)') {
+  throw "[FAIL] selection box visual layer can still capture mouse input"
 }
-Write-Host "[PASS] selection box ignores mouse input"
+Write-Host "[PASS] selection box visual layer ignores mouse input"
 
 if ($hotkey -notmatch 'WM_RBUTTONDOWN' -or $hotkey -notmatch 'MouseButton::Right' -or $main -notmatch 'selection_active\.load\(Ordering::SeqCst\)') {
   throw "[FAIL] right click is not handled by the global selection cancel path"
 }
 Write-Host "[PASS] right click is handled by the global selection cancel path"
 
-if ($main -notmatch 'capture_frozen_screen\(\)[\s\S]{0,360}show_selection_dim\(&app\)') {
+if ($main -notmatch 'capture_frozen_screen\(\)[\s\S]{0,420}show_selection_dim\(&app,\s*frozen_screen\.as_ref\(\)\)') {
   throw "[FAIL] OCR dim layer can be captured before the frozen screenshot"
 }
 Write-Host "[PASS] OCR freezes the screen before showing the dim layer"
