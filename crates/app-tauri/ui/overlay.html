@@ -135,6 +135,9 @@
         overflow-wrap: anywhere;
         word-break: break-word;
         align-self: stretch;
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
       }
       #sourceBlock {
         background: rgba(40, 88, 165, 0.55);
@@ -182,6 +185,8 @@
       let doubleClickClose = true;
       let draggable = true;
       let maxHeight = 620;
+      let resizeFrame = 0;
+      let lastResizeRequest = { width: 0, height: 0 };
 
       function cleanDisplayText(value) {
         return String(value ?? "")
@@ -228,6 +233,13 @@
         requestAnimationFrame(resizeToContent);
       }
 
+      function scheduleResizeToContent() {
+        if (resizeFrame) {
+          cancelAnimationFrame(resizeFrame);
+        }
+        resizeFrame = requestAnimationFrame(resizeToContent);
+      }
+
       function updateScrollIndicator() {
         const canScroll =
           blocks.scrollHeight > blocks.clientHeight + 1 ||
@@ -253,8 +265,16 @@
           translationBlock.getBoundingClientRect().height;
         blocks.classList.toggle("scrolling", contentHeight > maxHeight + 1);
         const rect = blocks.getBoundingClientRect();
-        const width = Math.ceil(rect.width + 2);
+        const width = Math.ceil(window.innerWidth || rect.width || 160);
         const height = Math.ceil(Math.min(rect.height, maxHeight) + 2);
+        if (
+          Math.abs(lastResizeRequest.width - width) <= 1 &&
+          Math.abs(lastResizeRequest.height - height) <= 1
+        ) {
+          requestAnimationFrame(updateScrollIndicator);
+          return;
+        }
+        lastResizeRequest = { width, height };
         await invoke("resize_overlay_to_content", {
           request: {
             width: Math.max(width, 160),
@@ -285,6 +305,7 @@
         event.preventDefault();
         await invoke("start_overlay_drag").catch(() => {});
       });
+      window.addEventListener("resize", scheduleResizeToContent);
       blocks.addEventListener("scroll", updateScrollIndicator, { passive: true });
     </script>
   </body>

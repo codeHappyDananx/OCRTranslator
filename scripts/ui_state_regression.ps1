@@ -128,6 +128,21 @@ if ($overlay -notmatch 'getBoundingClientRect\(\)' -or $overlay -notmatch 'conte
 }
 Write-Host "[PASS] overlay measures rendered content and scrolling state"
 
+if ($overlay -notmatch 'addEventListener\("resize",\s*scheduleResizeToContent\)' -or $overlay -notmatch 'window\.innerWidth' -or $main -notmatch '\.resizable\(true\)') {
+  throw "[FAIL] overlay does not reflow when manually resized"
+}
+Write-Host "[PASS] overlay reflows when manually resized"
+
+if ($main -match 'request\.width\.clamp\(160,\s*cfg\.overlay\.width') {
+  throw "[FAIL] overlay resize still clamps manual width to configured width"
+}
+Write-Host "[PASS] overlay manual width is not clamped to configured width"
+
+if ($overlay -notmatch 'max-width:\s*100%' -or $overlay -notmatch 'box-sizing:\s*border-box') {
+  throw "[FAIL] overlay text sections are not constrained to resized width"
+}
+Write-Host "[PASS] overlay text sections follow resized width"
+
 $mustNotHave = @(
   'id="ocrEngine"',
   'id="ocrBtn"',

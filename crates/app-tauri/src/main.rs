@@ -316,7 +316,7 @@ fn resize_overlay_to_content(
         return Ok(());
     };
     let current = window.outer_position().map_err(|e| e.to_string())?;
-    let mut width = request.width.clamp(160, cfg.overlay.width.clamp(180, 900));
+    let mut width = request.width.max(160);
     let mut height = request.height.max(54);
     let mut x = current.x;
     let mut y = current.y;
@@ -795,6 +795,7 @@ fn show_overlay(
             .transparent(true)
             .always_on_top(true)
             .focusable(false)
+            .resizable(true)
             .skip_taskbar(true)
             .visible(false)
             .inner_size(width as f64, height as f64)
