@@ -30,6 +30,7 @@ use tauri::{
     Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl, WebviewWindowBuilder,
     WindowEvent,
 };
+use tauri_plugin_autostart::ManagerExt as _;
 use tokio::sync::mpsc;
 use windows::{
     core::{w, PCWSTR},
@@ -144,6 +145,7 @@ fn save_config(
         .lock()
         .map_err(|e| format!("写入配置锁失败：{e}"))?;
     *guard = config.clone();
+    sync_autostart_setting(&app, &config).map_err(|e| e.to_string())?;
     refresh_overlay_settings(&app, &config);
     Ok(())
 }
@@ -1960,6 +1962,21 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+fn sync_autostart_setting(app: &tauri::AppHandle, cfg: &AppConfig) -> anyhow::Result<()> {
+    let manager = app.autolaunch();
+    let enabled = manager.is_enabled().unwrap_or(false);
+    match (cfg.app.launch_at_startup, enabled) {
+        (true, false) => manager.enable()?,
+        (false, true) => manager.disable()?,
+        _ => {}
+    }
+    Ok(())
+}
+
+fn launched_from_autostart() -> bool {
+    std::env::args().any(|arg| arg == "--from-autostart")
+}
+
 fn maybe_relaunch_as_admin(cfg: &AppConfig) {
     if !cfg.app.auto_elevate || is_running_as_admin() {
         return;
@@ -2001,6 +2018,16 @@ fn main() {
     config.normalize();
     maybe_relaunch_as_admin(&config);
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+            let _ = app.emit("ocr-status", "程序已经在运行，已打开现有窗口。");
+        }))
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .app_name("OCR Translator")
+                .arg("--from-autostart")
+                .build(),
+        )
         .manage(AppState {
             config: Mutex::new(config),
             last_overlay: Mutex::new(None),
@@ -2010,11 +2037,23 @@ fn main() {
         })
         .setup(|app| {
             setup_tray(app)?;
+            {
+                let state = app.state::<AppState>();
+                let cfg = state.config.lock().map(|cfg| cfg.clone());
+                if let Ok(cfg) = cfg {
+                    if let Err(err) = sync_autostart_setting(app.handle(), &cfg) {
+                        let _ = app.emit("ocr-status", format!("同步开机自启动失败：{err}"));
+                    }
+                }
+            }
             if let Ok(resource_dir) = app.path().resource_dir() {
                 let bundled_oneocr = resource_dir.join("SnippingTool");
                 if bundled_oneocr.is_dir() {
                     std::env::set_var("OCR_TRANSLATOR_ONEOCR_DIR", bundled_oneocr);
                 }
+            }
+            if launched_from_autostart() {
+                let _ = hide_main_window(app.handle());
             }
             let (tx, mut rx) = mpsc::unbounded_channel();
             match app_windows::GlobalInputHook::start(tx) {

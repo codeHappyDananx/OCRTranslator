@@ -23,6 +23,8 @@ pub struct AppBehaviorConfig {
     pub ask_before_close: bool,
     #[serde(default)]
     pub auto_elevate: bool,
+    #[serde(default)]
+    pub launch_at_startup: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -70,6 +72,7 @@ impl Default for AppBehaviorConfig {
             close_to_tray: false,
             ask_before_close: default_ask_before_close(),
             auto_elevate: false,
+            launch_at_startup: false,
         }
     }
 }
@@ -158,7 +161,8 @@ impl AppConfig {
         let missing_app_fields = !text.contains("\"app\"")
             || !text.contains("\"close_to_tray\"")
             || !text.contains("\"ask_before_close\"")
-            || !text.contains("\"auto_elevate\"");
+            || !text.contains("\"auto_elevate\"")
+            || !text.contains("\"launch_at_startup\"");
         let mut cfg: Self = serde_json::from_str(&text)
             .with_context(|| format!("解析配置失败：{}", path.display()))?;
         let before = cfg.clone();

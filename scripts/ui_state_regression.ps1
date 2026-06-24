@@ -46,6 +46,8 @@ $checks = @(
   @{ Name = "hotkey capture input"; Source = $settings; Pattern = '请按键或鼠标侧键' },
   @{ Name = "OCR translation uses semantic paragraph blocks"; Source = $main; Pattern = 'ocr_translation_blocks[\s\S]*flush_translation_paragraph' },
   @{ Name = "Windows executable starts normally"; Source = "$manifest`n$buildScript"; Pattern = 'requestedExecutionLevel level="asInvoker"[\s\S]*embed_resource::compile\("app\.manifest\.rc"' },
+  @{ Name = "single instance prevents duplicate tray processes"; Source = $main; Pattern = 'tauri_plugin_single_instance::init[\s\S]*show_main_window' },
+  @{ Name = "startup autostart setting wired"; Source = "$main`n$config`n$settings"; Pattern = 'tauri_plugin_autostart[\s\S]*--from-autostart[\s\S]*sync_autostart_setting[\s\S]*launch_at_startup[\s\S]*开机时自动启动到托盘' },
   @{ Name = "admin mode is config driven"; Source = "$main`n$config`n$settings"; Pattern = 'auto_elevate[\s\S]*ShellExecuteW[\s\S]*启动时自动以管理员权限运行' },
   @{ Name = "main close prompt wired"; Source = "$main`n$settings"; Pattern = 'main-close-requested[\s\S]*handle_close_choice' },
   @{ Name = "tray open and exit wired"; Source = $main; Pattern = 'TrayIconBuilder[\s\S]*tray_open[\s\S]*tray_exit' },

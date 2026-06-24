@@ -39,6 +39,7 @@ type AppBehaviorConfig = {
   close_to_tray: boolean;
   ask_before_close: boolean;
   auto_elevate: boolean;
+  launch_at_startup: boolean;
 };
 
 type AppConfig = {
@@ -56,6 +57,7 @@ const defaultAppBehavior: AppBehaviorConfig = {
   close_to_tray: false,
   ask_before_close: true,
   auto_elevate: false,
+  launch_at_startup: false,
 };
 
 const defaultOverlay: OverlayConfig = {
@@ -328,6 +330,14 @@ function SettingsApp() {
               onChange={(event) => setAppBehavior({ auto_elevate: event.target.checked })}
             />
             启动时自动以管理员权限运行
+          </label>
+          <label className="field check">
+            <input
+              type="checkbox"
+              checked={config.app.launch_at_startup}
+              onChange={(event) => setAppBehavior({ launch_at_startup: event.target.checked })}
+            />
+            开机时自动启动到托盘
           </label>
           <div className="hint">
             当前权限：{isAdmin ? "管理员" : "普通用户"}。自动管理员会在下次启动时生效。
