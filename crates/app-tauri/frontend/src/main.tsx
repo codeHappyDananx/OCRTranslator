@@ -420,17 +420,6 @@ function SettingsApp() {
               </label>
             </div>
           ) : null}
-          <label className="field">
-            屏幕边距
-            <input
-              type="number"
-              min={0}
-              max={120}
-              step={1}
-              value={config.overlay.screen_margin}
-              onChange={(event) => setOverlay({ screen_margin: Number(event.target.value || 12) })}
-            />
-          </label>
           <label className="field check">
             <input
               type="checkbox"
