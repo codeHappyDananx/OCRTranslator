@@ -238,6 +238,7 @@ function SettingsApp() {
       ...current,
       app: { ...current.app, ...patch },
     }));
+  const isImageReplaceMode = config.overlay.result_mode === "image_replace";
 
   async function chooseClose(choice: "tray" | "exit") {
     setClosePromptVisible(false);
@@ -349,28 +350,34 @@ function SettingsApp() {
               <option value="image_replace">原图替换翻译</option>
             </select>
           </label>
-          <label className="field">
-            默认宽度
-            <input
-              type="number"
-              min={180}
-              max={900}
-              step={10}
-              value={config.overlay.width}
-              onChange={(event) => setOverlay({ width: Number(event.target.value || 320) })}
-            />
-          </label>
-          <label className="field">
-            最大高度
-            <input
-              type="number"
-              min={120}
-              max={1200}
-              step={10}
-              value={config.overlay.max_height}
-              onChange={(event) => setOverlay({ max_height: Number(event.target.value || 620) })}
-            />
-          </label>
+          {!isImageReplaceMode ? (
+            <>
+              <label className="field">
+                默认宽度
+                <input
+                  type="number"
+                  min={180}
+                  max={900}
+                  step={10}
+                  value={config.overlay.width}
+                  onChange={(event) => setOverlay({ width: Number(event.target.value || 320) })}
+                />
+              </label>
+              <label className="field">
+                最大高度
+                <input
+                  type="number"
+                  min={120}
+                  max={1200}
+                  step={10}
+                  value={config.overlay.max_height}
+                  onChange={(event) =>
+                    setOverlay({ max_height: Number(event.target.value || 620) })
+                  }
+                />
+              </label>
+            </>
+          ) : null}
           <label className="field">
             字体大小
             <input
@@ -393,24 +400,26 @@ function SettingsApp() {
               onChange={(event) => setOverlay({ opacity: Number(event.target.value || 0.55) })}
             />
           </label>
-          <div className="color-grid">
-            <label className="field">
-              原文背景
-              <input
-                type="color"
-                value={config.overlay.source_background}
-                onChange={(event) => setOverlay({ source_background: event.target.value })}
-              />
-            </label>
-            <label className="field">
-              译文背景
-              <input
-                type="color"
-                value={config.overlay.translation_background}
-                onChange={(event) => setOverlay({ translation_background: event.target.value })}
-              />
-            </label>
-          </div>
+          {!isImageReplaceMode ? (
+            <div className="color-grid">
+              <label className="field">
+                原文背景
+                <input
+                  type="color"
+                  value={config.overlay.source_background}
+                  onChange={(event) => setOverlay({ source_background: event.target.value })}
+                />
+              </label>
+              <label className="field">
+                译文背景
+                <input
+                  type="color"
+                  value={config.overlay.translation_background}
+                  onChange={(event) => setOverlay({ translation_background: event.target.value })}
+                />
+              </label>
+            </div>
+          ) : null}
           <label className="field">
             屏幕边距
             <input
@@ -430,14 +439,16 @@ function SettingsApp() {
             />
             双击关闭
           </label>
-          <label className="field check">
-            <input
-              type="checkbox"
-              checked={config.overlay.show_source}
-              onChange={(event) => setOverlay({ show_source: event.target.checked })}
-            />
-            原文在上，译文在下
-          </label>
+          {!isImageReplaceMode ? (
+            <label className="field check">
+              <input
+                type="checkbox"
+                checked={config.overlay.show_source}
+                onChange={(event) => setOverlay({ show_source: event.target.checked })}
+              />
+              原文在上，译文在下
+            </label>
+          ) : null}
           <label className="field check">
             <input
               type="checkbox"
