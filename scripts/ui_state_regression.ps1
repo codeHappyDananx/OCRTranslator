@@ -6,6 +6,7 @@ $nativeSelection = Get-Content (Join-Path $ProjectRoot "crates\app-windows\src\n
 $config = Get-Content (Join-Path $ProjectRoot "crates\app-core\src\config.rs") -Raw
 $settings = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\frontend\src\main.tsx") -Raw
 $overlay = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\frontend\src\overlay.tsx") -Raw
+$statusOverlay = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\frontend\src\status.tsx") -Raw
 $styles = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\frontend\src\styles.css") -Raw
 $tauriConfig = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\tauri.conf.json") -Raw
 $manifest = Get-Content (Join-Path $ProjectRoot "crates\app-tauri\app.exe.manifest") -Raw
@@ -16,6 +17,7 @@ $checks = @(
   @{ Name = "frontend dist configured"; Source = $tauriConfig; Pattern = '"frontendDist":\s*"frontend/dist"' },
   @{ Name = "frontend build command configured"; Source = $tauriConfig; Pattern = '"beforeBuildCommand":\s*"npm run build"' },
   @{ Name = "overlay loads React page"; Source = $main; Pattern = 'WebviewUrl::App\("overlay\.html"\.into\(\)\)' },
+  @{ Name = "status overlay loads React page"; Source = "$main`n$statusOverlay"; Pattern = 'WebviewUrl::App\("status\.html"\.into\(\)\)[\s\S]*status-overlay-update' },
   @{ Name = "shadcn Card used"; Source = $overlay; Pattern = '<Card[\s\S]*translation-card' },
   @{ Name = "shadcn ScrollArea used"; Source = $overlay; Pattern = '<ScrollArea>' },
   @{ Name = "shadcn Resizable panels used"; Source = $overlay; Pattern = 'ResizablePanelGroup[\s\S]*direction="vertical"' },
@@ -40,6 +42,7 @@ $checks = @(
   @{ Name = "native selector right click cancels"; Source = $nativeSelection; Pattern = 'WM_RBUTTONUP' },
   @{ Name = "native selector cleanup exported"; Source = "$main`n$nativeSelection"; Pattern = 'close_native_selection_windows' },
   @{ Name = "selection cleanup before pipeline"; Source = $main; Pattern = 'async fn run_pipeline[\s\S]{0,180}cleanup_selection_layers\(&app\)' },
+  @{ Name = "pipeline shows transient status overlay"; Source = $main; Pattern = 'show_status_overlay[\s\S]*正在截图[\s\S]*正在识别文字[\s\S]*正在翻译[\s\S]*hide_status_overlay' },
   @{ Name = "selection cleanup before overlay"; Source = $main; Pattern = 'fn show_overlay[\s\S]{0,420}cleanup_selection_layers\(app\)' },
   @{ Name = "selection cleanup on cancel"; Source = $main; Pattern = 'fn finish_selection_cancel[\s\S]{0,220}cleanup_selection_layers\(app\)' },
   @{ Name = "selection state cleared"; Source = $main; Pattern = 'selection_active\.store\(false[\s\S]*selection_cancel\.store\(false' },

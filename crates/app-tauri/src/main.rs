@@ -102,6 +102,12 @@ struct OverlayPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct StatusOverlayPayload {
+    text: String,
+    done: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ImageReplacementBlock {
     source_text: String,
     translated_text: String,
@@ -416,6 +422,7 @@ fn get_cursor_position() -> Result<Point, String> {
 fn start_selection_window(app: &tauri::AppHandle, _cfg: &AppConfig) -> anyhow::Result<()> {
     let _ = release_cursor_lock();
     cleanup_selection_layers(app);
+    hide_status_overlay(app);
     if let Some(window) = app.get_webview_window("overlay") {
         let _ = window.hide();
     }
@@ -583,6 +590,7 @@ fn restore_main_window_after_selection(app: &tauri::AppHandle, restore: bool) {
 
 fn cleanup_runtime_windows(app: &tauri::AppHandle) {
     cleanup_selection_layers(app);
+    hide_status_overlay(app);
     let _ = release_cursor_lock();
     if let Some(window) = app.get_webview_window("overlay") {
         let _ = window.hide();
@@ -1017,6 +1025,63 @@ fn clear_overlay_payload(app: &tauri::AppHandle) {
     }
 }
 
+fn show_status_overlay(app: &tauri::AppHandle, anchor: Point, text: &str) -> anyhow::Result<()> {
+    let width = 188u32;
+    let height = 44u32;
+    let mut x = anchor.x + 14;
+    let mut y = anchor.y + 14;
+    let mut window_width = width;
+    let mut window_height = height;
+    let cfg = app
+        .try_state::<AppState>()
+        .and_then(|state| state.config.lock().ok().map(|cfg| cfg.clone()))
+        .unwrap_or_default();
+    let _ = clamp_overlay_to_primary_monitor(
+        app,
+        &cfg,
+        &mut x,
+        &mut y,
+        &mut window_width,
+        &mut window_height,
+    );
+
+    let window = if let Some(window) = app.get_webview_window("status") {
+        window
+    } else {
+        WebviewWindowBuilder::new(app, "status", WebviewUrl::App("status.html".into()))
+            .title("OCR 状态")
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .focusable(false)
+            .resizable(false)
+            .skip_taskbar(true)
+            .visible(false)
+            .inner_size(width as f64, height as f64)
+            .build()?
+    };
+    window.set_size(PhysicalSize::new(width, height))?;
+    window.set_position(PhysicalPosition::new(x, y))?;
+    let _ = window.set_focusable(false);
+    let _ = window.set_skip_taskbar(true);
+    let _ = window.set_always_on_top(true);
+    window.show()?;
+    window.emit(
+        "status-overlay-update",
+        StatusOverlayPayload {
+            text: text.to_string(),
+            done: false,
+        },
+    )?;
+    Ok(())
+}
+
+fn hide_status_overlay(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("status") {
+        let _ = window.hide();
+    }
+}
+
 async fn run_pipeline(
     app: tauri::AppHandle,
     cfg: AppConfig,
@@ -1024,6 +1089,7 @@ async fn run_pipeline(
     frozen_screen: Option<FrozenScreen>,
 ) -> anyhow::Result<()> {
     cleanup_selection_layers(&app);
+    let _ = show_status_overlay(&app, payload.anchor, "正在截图...");
     app.emit("ocr-status", "正在截图...")?;
     let selected_rect = payload.rect.normalized();
     let capture_rect = selected_rect;
@@ -1039,6 +1105,7 @@ async fn run_pipeline(
             return Ok(());
         }
     };
+    let _ = show_status_overlay(&app, payload.anchor, "正在识别文字...");
     app.emit("ocr-status", "正在识别文字...")?;
     let ocr_result = match recognize_png_pipeline(
         &png,
@@ -1098,6 +1165,7 @@ async fn run_pipeline(
         .get(&cfg.translator)
         .cloned()
         .unwrap_or_default();
+    let _ = show_status_overlay(&app, payload.anchor, "正在翻译...");
     app.emit("ocr-status", "正在翻译...")?;
     let image_blocks = if cfg.overlay.result_mode == "image_replace" && !ocr_result.lines.is_empty()
     {
@@ -1119,6 +1187,7 @@ async fn run_pipeline(
             .await
             .unwrap_or_else(|_| format!("翻译没有成功，请稍后再试。\n\n原文：\n{raw_text}"))
     };
+    let _ = show_status_overlay(&app, payload.anchor, "正在显示结果...");
     show_overlay(
         &app,
         &cfg,
@@ -1140,6 +1209,7 @@ fn show_user_message(
     message: &str,
 ) -> anyhow::Result<()> {
     cleanup_selection_layers(app);
+    hide_status_overlay(app);
     let _ = app.emit("ocr-status", message);
     show_overlay(
         app,
@@ -1673,6 +1743,7 @@ fn show_overlay(
     image_blocks: Vec<ImageReplacementBlock>,
 ) -> anyhow::Result<()> {
     cleanup_selection_layers(app);
+    hide_status_overlay(app);
     let display_raw_text = ocr_display_text(&raw_text);
     let has_source = cfg.overlay.show_source && !display_raw_text.trim().is_empty();
     let display_text = if has_source {

@@ -14,6 +14,54 @@ body {
   margin: 0;
 }
 
+.status-body {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+}
+
+.status-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 320px;
+  padding: 10px 14px;
+  color: rgba(255, 255, 255, 0.96);
+  background: rgba(22, 25, 31, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.32);
+  font-size: 14px;
+  line-height: 1.35;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+}
+
+.status-spinner {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.28);
+  border-top-color: rgba(255, 255, 255, 0.95);
+  border-radius: 999px;
+  animation: status-spin 780ms linear infinite;
+}
+
+.status-card.done .status-spinner {
+  border-color: rgba(136, 220, 118, 0.65);
+  border-top-color: rgba(136, 220, 118, 1);
+}
+
+.status-text {
+  overflow-wrap: anywhere;
+}
+
+@keyframes status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 button,
 input,
 select,
