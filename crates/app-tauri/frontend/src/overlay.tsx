@@ -122,6 +122,10 @@ function rgbaFromHex(hex: string, opacity = 1) {
 function OverlayApp() {
   const [payload, setPayload] = React.useState<OverlayPayload>(emptyPayload);
   const [userSized, setUserSized] = React.useState(false);
+  const [viewportSize, setViewportSize] = React.useState({
+    width: window.innerWidth || 1,
+    height: window.innerHeight || 1,
+  });
   const cardRef = React.useRef<HTMLDivElement | null>(null);
   const sourcePanelRef = React.useRef<ResizablePanelHandle | null>(null);
   const translationPanelRef = React.useRef<ResizablePanelHandle | null>(null);
@@ -143,6 +147,16 @@ function OverlayApp() {
     opacity,
     "#127858",
   );
+  const imageScale =
+    imageReplaceMode && payload.image_width > 0 && payload.image_height > 0
+      ? Math.min(
+          1,
+          viewportSize.width / payload.image_width,
+          viewportSize.height / payload.image_height,
+        )
+      : 1;
+  const imageDisplayWidth = Math.max(1, payload.image_width * imageScale);
+  const imageDisplayHeight = Math.max(1, payload.image_height * imageScale);
 
   React.useEffect(() => {
     let disposed = false;
@@ -223,6 +237,10 @@ function OverlayApp() {
 
   React.useEffect(() => {
     function onResize() {
+      setViewportSize({
+        width: window.innerWidth || 1,
+        height: window.innerHeight || 1,
+      });
       if (performance.now() < ignoreResizeUntil.current) return;
       setUserSized(true);
     }
@@ -264,8 +282,8 @@ function OverlayApp() {
         style={
           imageReplaceMode
             ? {
-                width: payload.image_width,
-                height: payload.image_height,
+                width: imageDisplayWidth,
+                height: imageDisplayHeight,
                 fontSize: replacementFontSize,
               }
             : { fontSize, maxHeight }
@@ -273,7 +291,14 @@ function OverlayApp() {
         onMouseDown={startDrag}
       >
         {imageReplaceMode ? (
-          <div className="image-replace-surface">
+          <div
+            className="image-replace-surface"
+            style={{
+              width: payload.image_width,
+              height: payload.image_height,
+              transform: `scale(${imageScale})`,
+            }}
+          >
             <img
               className="image-replace-source"
               src={payload.source_image_data_url ?? ""}

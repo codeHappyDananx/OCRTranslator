@@ -292,6 +292,7 @@ input[type="color"] {
   height: 100%;
   overflow: hidden;
   border-radius: 0;
+  transform-origin: top left;
 }
 
 .image-replace-source {
