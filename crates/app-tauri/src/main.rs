@@ -863,7 +863,6 @@ mod tests {
 
     #[test]
     fn image_replacement_groups_card_columns_without_screen_wide_bands() {
-        let image = RgbaImage::from_pixel(1600, 700, Rgba([46, 51, 64, 255]));
         let mut lines = Vec::new();
         for x in [86.0, 440.0, 798.0, 1154.0] {
             lines.push(test_ocr_line(
@@ -882,7 +881,7 @@ mod tests {
             ));
         }
 
-        let groups = group_ocr_lines(&image, &lines, 1600, 700);
+        let groups = group_ocr_lines(&lines, 1600, 700);
 
         assert_eq!(groups.len(), 4, "{groups:#?}");
         for group in groups {
@@ -896,6 +895,31 @@ mod tests {
                 "replacement block should still cover its local source text, got {group:#?}"
             );
         }
+    }
+
+    #[test]
+    fn image_replacement_translates_full_card_paragraph_instead_of_color_fragments() {
+        let lines = vec![
+            test_ocr_line("Become immune to most", 264.0, 513.0, 187.0, 19.0),
+            test_ocr_line("attacks and 100% ATK and", 257.0, 535.0, 201.0, 17.0),
+            test_ocr_line("MATK for the first 15", 278.0, 552.0, 156.0, 19.0),
+            test_ocr_line("seconds of the fight. Does", 259.0, 574.0, 196.0, 17.0),
+            test_ocr_line("NOT ignore iframe", 287.0, 591.0, 138.0, 18.0),
+            test_ocr_line("penetrating attacks", 286.0, 614.0, 147.0, 17.0),
+        ];
+
+        let groups = group_ocr_lines(&lines, 1600, 700);
+
+        assert_eq!(groups.len(), 1, "{groups:#?}");
+        assert_eq!(groups[0].line_count, 6);
+        assert_eq!(
+            groups[0].text,
+            "Become immune to most\nattacks and 100% ATK and\nMATK for the first 15\nseconds of the fight. Does\nNOT ignore iframe\npenetrating attacks"
+        );
+        assert_eq!(
+            image_replacement_translation_source(&groups[0].text),
+            "Become immune to most attacks and 100% ATK and MATK for the first 15 seconds of the fight. Does NOT ignore iframe penetrating attacks"
+        );
     }
 
     fn test_ocr_line(text: &str, x: f32, y: f32, width: f32, height: f32) -> OcrTextLine {
@@ -1199,8 +1223,6 @@ impl FloatRect {
 struct VisualTextLine {
     text: String,
     rect: FloatRect,
-    background: [u8; 3],
-    foreground: [u8; 3],
 }
 
 #[derive(Debug, Clone)]
@@ -1218,13 +1240,21 @@ async fn build_image_replacement_blocks(
 ) -> anyhow::Result<Vec<ImageReplacementBlock>> {
     let image = image::load_from_memory(png)?.to_rgba8();
     let (image_width, image_height) = image.dimensions();
-    let groups = group_ocr_lines(&image, lines, image_width, image_height);
+    let groups = group_ocr_lines(lines, image_width, image_height);
     let mut blocks = Vec::with_capacity(groups.len());
 
     for group in groups {
-        let translated = translate_preserving_lines(cfg, settings, &group.text)
-            .await
-            .unwrap_or_else(|_| group.text.clone());
+        let translation_source = image_replacement_translation_source(&group.text);
+        let translated = translate(TranslationRequest {
+            provider_id: cfg.translator.clone(),
+            text: translation_source.clone(),
+            source_lang: cfg.source_lang.clone(),
+            target_lang: cfg.target_lang.clone(),
+            settings: settings.clone(),
+        })
+        .await
+        .map(|result| result.text)
+        .unwrap_or_else(|_| group.text.clone());
         let (background, color) = sample_replacement_colors(&image, group.rect);
         let base_font =
             estimate_source_font_size(group.rect, group.line_count, cfg.overlay.font_size);
@@ -1236,7 +1266,7 @@ async fn build_image_replacement_blocks(
         };
 
         blocks.push(ImageReplacementBlock {
-            source_text: group.text,
+            source_text: translation_source,
             translated_text: translated.trim().to_string(),
             x: group.rect.x,
             y: group.rect.y,
@@ -1252,8 +1282,17 @@ async fn build_image_replacement_blocks(
     Ok(blocks)
 }
 
+fn image_replacement_translation_source(text: &str) -> String {
+    ocr_translation_blocks(text)
+        .join("\n\n")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn group_ocr_lines(
-    image: &RgbaImage,
     lines: &[OcrTextLine],
     image_width: u32,
     image_height: u32,
@@ -1265,14 +1304,9 @@ fn group_ocr_lines(
             if text.is_empty() {
                 return None;
             }
-            ocr_bbox_to_rect(&line.bbox, image_width, image_height).map(|rect| {
-                let (background, foreground) = sample_replacement_rgb(image, rect);
-                VisualTextLine {
-                    text: text.to_string(),
-                    rect,
-                    background,
-                    foreground,
-                }
+            ocr_bbox_to_rect(&line.bbox, image_width, image_height).map(|rect| VisualTextLine {
+                text: text.to_string(),
+                rect,
             })
         })
         .collect::<Vec<_>>();
@@ -1316,7 +1350,6 @@ fn group_ocr_lines(
 
             if overlaps_previous_row
                 || vertical_gap > gap_threshold
-                || !similar_line_style(previous, &line)
                 || !same_text_column(group_rect, line.rect, median_height, x_threshold)
             {
                 continue;
@@ -1391,20 +1424,6 @@ fn same_text_column(
 
 fn horizontal_overlap(a: FloatRect, b: FloatRect) -> f32 {
     (a.right().min(b.right()) - a.x.max(b.x)).max(0.0)
-}
-
-fn similar_line_style(a: &VisualTextLine, b: &VisualTextLine) -> bool {
-    let height_ratio = a.rect.height.min(b.rect.height) / a.rect.height.max(b.rect.height).max(1.0);
-    height_ratio > 0.72
-        && color_distance(a.foreground, b.foreground) < 72.0
-        && color_distance(a.background, b.background) < 48.0
-}
-
-fn color_distance(a: [u8; 3], b: [u8; 3]) -> f32 {
-    let dr = f32::from(a[0]) - f32::from(b[0]);
-    let dg = f32::from(a[1]) - f32::from(b[1]);
-    let db = f32::from(a[2]) - f32::from(b[2]);
-    (dr * dr + dg * dg + db * db).sqrt()
 }
 
 fn ocr_bbox_to_rect(bbox: &[f32; 8], image_width: u32, image_height: u32) -> Option<FloatRect> {
