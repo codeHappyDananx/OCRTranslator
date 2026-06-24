@@ -22,6 +22,7 @@ $checks = @(
   @{ Name = "source plus translation setting"; Source = $settings; Pattern = 'show_source' },
   @{ Name = "result display mode setting"; Source = "$settings`n$config"; Pattern = 'result_mode[\s\S]*image_replace' },
   @{ Name = "image replace overlay branch"; Source = "$overlay`n$styles"; Pattern = 'imageReplaceMode[\s\S]*image_blocks[\s\S]*image-replace-source[\s\S]*image-replace-block-layer[\s\S]*image-replace-block' },
+  @{ Name = "image replace resize preserves selected size"; Source = "$overlay`n$main"; Pattern = 'mode:\s*"image_replace"[\s\S]*request\.mode != "image_replace"' },
   @{ Name = "overlay draggable setting"; Source = $settings; Pattern = 'draggable' },
   @{ Name = "source background color setting"; Source = $settings; Pattern = 'source_background' },
   @{ Name = "translation background color setting"; Source = $settings; Pattern = 'translation_background' },

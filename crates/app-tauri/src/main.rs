@@ -118,6 +118,8 @@ struct ImageReplacementBlock {
 struct OverlayResizeRequest {
     width: u32,
     height: u32,
+    #[serde(default)]
+    mode: String,
 }
 
 #[tauri::command]
@@ -349,7 +351,29 @@ fn resize_overlay_to_content(
     let mut x = current.x;
     let mut y = current.y;
 
-    if let Some(monitor) = app.primary_monitor().map_err(|e| e.to_string())? {
+    if request.mode != "image_replace" {
+        clamp_overlay_to_primary_monitor(&app, &cfg, &mut x, &mut y, &mut width, &mut height)
+            .map_err(|e| e.to_string())?;
+    }
+
+    window
+        .set_size(PhysicalSize::new(width, height))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_position(PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn clamp_overlay_to_primary_monitor(
+    app: &tauri::AppHandle,
+    cfg: &AppConfig,
+    x: &mut i32,
+    y: &mut i32,
+    width: &mut u32,
+    height: &mut u32,
+) -> anyhow::Result<()> {
+    if let Some(monitor) = app.primary_monitor()? {
         let pos = monitor.position();
         let size = monitor.size();
         let margin = cfg.overlay.screen_margin;
@@ -359,24 +383,17 @@ fn resize_overlay_to_content(
         let bottom = pos.y + size.height as i32 - margin;
         let max_width = (right - left).max(160) as u32;
         let max_height = (bottom - top).max(54) as u32;
-        width = width.min(max_width);
-        height = height.min(max_height);
-        if x + width as i32 > right {
-            x = (right - width as i32).max(left);
+        *width = (*width).min(max_width);
+        *height = (*height).min(max_height);
+        if *x + *width as i32 > right {
+            *x = (right - *width as i32).max(left);
         }
-        if y + height as i32 > bottom {
-            y = (bottom - height as i32).max(top);
+        if *y + *height as i32 > bottom {
+            *y = (bottom - *height as i32).max(top);
         }
-        x = x.max(left);
-        y = y.max(top);
+        *x = (*x).max(left);
+        *y = (*y).max(top);
     }
-
-    window
-        .set_size(PhysicalSize::new(width, height))
-        .map_err(|e| e.to_string())?;
-    window
-        .set_position(PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1682,7 +1699,7 @@ fn show_overlay(
     };
     let image_rect = image_rect.map(|rect| rect.normalized());
     let metrics = estimate_overlay_size(&display_text, cfg.overlay.width, cfg.overlay.font_size);
-    let (width, height) = if result_mode == "image_replace" {
+    let (mut width, mut height) = if result_mode == "image_replace" {
         let rect = image_rect.expect("image_replace requires image_rect");
         (rect.width.max(80) as u32, rect.height.max(36) as u32)
     } else {
@@ -1698,23 +1715,9 @@ fn show_overlay(
         .filter(|_| result_mode == "image_replace")
         .map(|rect| rect.y)
         .unwrap_or(anchor.y + cfg.overlay.offset_y);
-    if let Some(monitor) = app.primary_monitor()? {
-        let pos = monitor.position();
-        let size = monitor.size();
-        let margin = cfg.overlay.screen_margin;
-        let left = pos.x + margin;
-        let top = pos.y + margin;
-        let right = pos.x + size.width as i32 - margin;
-        let bottom = pos.y + size.height as i32 - margin;
-        max_height = max_height.min((bottom - top).max(54) as u32);
-        if x + width as i32 > right {
-            x = (right - width as i32).max(left);
-        }
-        if y + height as i32 > bottom {
-            y = (bottom - height as i32).max(top);
-        }
-        x = x.max(left);
-        y = y.max(top);
+    if result_mode != "image_replace" {
+        clamp_overlay_to_primary_monitor(app, cfg, &mut x, &mut y, &mut width, &mut height)?;
+        max_height = max_height.min(height.max(54));
     }
 
     let window = if let Some(window) = app.get_webview_window("overlay") {

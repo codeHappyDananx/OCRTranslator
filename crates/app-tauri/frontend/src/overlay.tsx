@@ -185,7 +185,9 @@ function OverlayApp() {
         }
         lastResize.current = { width, height };
         ignoreResizeUntil.current = performance.now() + 300;
-        invoke("resize_overlay_to_content", { request: { width, height } }).catch(() => {});
+        invoke("resize_overlay_to_content", {
+          request: { width, height, mode: "image_replace" },
+        }).catch(() => {});
         return;
       }
       const width = Math.max(180, Math.ceil(payload.width || card.scrollWidth || 320));
@@ -211,7 +213,9 @@ function OverlayApp() {
       }
       lastResize.current = { width, height };
       ignoreResizeUntil.current = performance.now() + 300;
-      invoke("resize_overlay_to_content", { request: { width, height } }).catch(() => {});
+      invoke("resize_overlay_to_content", {
+        request: { width, height, mode: "text_overlay" },
+      }).catch(() => {});
     };
     frame = window.requestAnimationFrame(resize);
     return () => window.cancelAnimationFrame(frame);
