@@ -287,7 +287,7 @@ function OverlayApp() {
                     width: block.width,
                     height: block.height,
                     color: block.color,
-                    background: rgbaFromHex(block.background, 0.96),
+                    background: rgbaFromHex(block.background, 0.985),
                     fontSize: block.font_size,
                   }}
                 >

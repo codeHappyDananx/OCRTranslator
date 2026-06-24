@@ -862,6 +862,50 @@ mod tests {
     }
 
     #[test]
+    fn image_replacement_groups_card_columns_without_screen_wide_bands() {
+        let image = RgbaImage::from_pixel(1600, 700, Rgba([46, 51, 64, 255]));
+        let mut lines = Vec::new();
+        for x in [86.0, 440.0, 798.0, 1154.0] {
+            lines.push(test_ocr_line(
+                "Gain immense amounts of",
+                x,
+                350.0,
+                250.0,
+                24.0,
+            ));
+            lines.push(test_ocr_line(
+                "execution damage.",
+                x + 18.0,
+                382.0,
+                214.0,
+                24.0,
+            ));
+        }
+
+        let groups = group_ocr_lines(&image, &lines, 1600, 700);
+
+        assert_eq!(groups.len(), 4, "{groups:#?}");
+        for group in groups {
+            assert_eq!(group.line_count, 2, "{group:#?}");
+            assert!(
+                group.rect.width < 310.0,
+                "replacement block should stay inside its source card, got {group:#?}"
+            );
+            assert!(
+                group.rect.width > 230.0,
+                "replacement block should still cover its local source text, got {group:#?}"
+            );
+        }
+    }
+
+    fn test_ocr_line(text: &str, x: f32, y: f32, width: f32, height: f32) -> OcrTextLine {
+        OcrTextLine {
+            text: text.to_string(),
+            bbox: [x, y, x + width, y, x + width, y + height, x, y + height],
+        }
+    }
+
+    #[test]
     fn builds_translation_blocks_from_wrapped_ocr_text() {
         let blocks = ocr_translation_blocks(
             "[Passive Benefit]\n\
@@ -1120,6 +1164,10 @@ impl FloatRect {
         self.y + self.height
     }
 
+    fn center_x(self) -> f32 {
+        self.x + self.width / 2.0
+    }
+
     fn union(self, other: Self) -> Self {
         let x1 = self.x.min(other.x);
         let y1 = self.y.min(other.y);
@@ -1254,27 +1302,39 @@ fn group_ocr_lines(
     let x_threshold = (median_height * 2.5).max(28.0);
 
     let mut groups: Vec<Vec<VisualTextLine>> = Vec::new();
-    let mut current = Vec::new();
     for line in visual_lines {
-        let should_split = current
-            .last()
-            .map(|previous: &VisualTextLine| {
-                let vertical_gap = line.rect.y - previous.rect.bottom();
-                let overlaps_previous_row =
-                    line.rect.y < previous.rect.bottom() - median_height * 0.35;
-                vertical_gap > gap_threshold
-                    || overlaps_previous_row
-                    || (line.rect.x - previous.rect.x).abs() > x_threshold
-                    || !similar_line_style(previous, &line)
-            })
-            .unwrap_or(false);
-        if should_split {
-            groups.push(std::mem::take(&mut current));
+        let mut best_group = None;
+        let mut best_score = f32::INFINITY;
+
+        for (index, group) in groups.iter().enumerate() {
+            let Some(previous) = group.last() else {
+                continue;
+            };
+            let group_rect = visual_group_rect(group);
+            let vertical_gap = line.rect.y - previous.rect.bottom();
+            let overlaps_previous_row = line.rect.y < previous.rect.bottom() - median_height * 0.35;
+
+            if overlaps_previous_row
+                || vertical_gap > gap_threshold
+                || !similar_line_style(previous, &line)
+                || !same_text_column(group_rect, line.rect, median_height, x_threshold)
+            {
+                continue;
+            }
+
+            let score =
+                vertical_gap.max(0.0) + (line.rect.center_x() - group_rect.center_x()).abs() * 0.2;
+            if score < best_score {
+                best_score = score;
+                best_group = Some(index);
+            }
         }
-        current.push(line);
-    }
-    if !current.is_empty() {
-        groups.push(current);
+
+        if let Some(index) = best_group {
+            groups[index].push(line);
+        } else {
+            groups.push(vec![line]);
+        }
     }
 
     groups
@@ -1290,14 +1350,7 @@ fn group_ocr_lines(
                 texts.push(line.text);
                 line_count += 1;
             }
-            let mut rect = rect.padded(3.0, 2.0, image_width, image_height);
-            if line_count > 1 {
-                let right_padding = 24.0;
-                rect.width = rect
-                    .width
-                    .max((image_width as f32 - rect.x - right_padding).max(rect.width))
-                    .min(image_width as f32 - rect.x);
-            }
+            let rect = rect.padded(4.0, 3.0, image_width, image_height);
             Some(VisualTextGroup {
                 text: texts.join("\n"),
                 rect,
@@ -1305,6 +1358,39 @@ fn group_ocr_lines(
             })
         })
         .collect()
+}
+
+fn visual_group_rect(group: &[VisualTextLine]) -> FloatRect {
+    let mut iter = group.iter();
+    let first = iter
+        .next()
+        .expect("visual_group_rect requires a non-empty group")
+        .rect;
+    iter.fold(first, |rect, line| rect.union(line.rect))
+}
+
+fn same_text_column(
+    group: FloatRect,
+    line: FloatRect,
+    median_height: f32,
+    x_threshold: f32,
+) -> bool {
+    let overlap = horizontal_overlap(group, line);
+    let narrow_width = group.width.min(line.width).max(1.0);
+    let overlap_ratio = overlap / narrow_width;
+    let center_delta = (group.center_x() - line.center_x()).abs();
+    let tolerated_center_delta = (group.width.max(line.width) * 0.56)
+        .max(x_threshold)
+        .max(median_height * 2.2);
+
+    overlap_ratio >= 0.18
+        || center_delta <= tolerated_center_delta
+            && line.right() >= group.x - median_height * 0.75
+            && line.x <= group.right() + median_height * 0.75
+}
+
+fn horizontal_overlap(a: FloatRect, b: FloatRect) -> f32 {
+    (a.right().min(b.right()) - a.x.max(b.x)).max(0.0)
 }
 
 fn similar_line_style(a: &VisualTextLine, b: &VisualTextLine) -> bool {
