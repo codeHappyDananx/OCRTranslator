@@ -2427,6 +2427,7 @@ dependencies = [
  "app-core",
  "app-windows",
  "base64 0.22.1",
+ "chrono",
  "embed-resource",
  "image",
  "serde",

@@ -30,6 +30,7 @@ type OverlayPayload = {
   double_click_close: boolean;
   show_source: boolean;
   draggable: boolean;
+  log_entry_id?: string | null;
 };
 
 type ImageReplacementBlock = {
@@ -43,6 +44,7 @@ type ImageReplacementBlock = {
   background: string;
   color: string;
   align: "left" | "center" | "right";
+  wrap_mode?: "wrap" | "single";
 };
 
 const emptyPayload: OverlayPayload = {
@@ -62,6 +64,7 @@ const emptyPayload: OverlayPayload = {
   double_click_close: true,
   show_source: true,
   draggable: true,
+  log_entry_id: null,
 };
 
 function cleanDisplayText(value: unknown) {
@@ -119,6 +122,93 @@ function rgbaFromHex(hex: string, opacity = 1) {
   return `rgba(${r}, ${g}, ${b}, ${opacity})`;
 }
 
+function loadCanvasImage(src: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("image load failed"));
+    image.src = src;
+  });
+}
+
+function wrapCanvasText(
+  context: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+) {
+  const rows: string[] = [];
+  for (const sourceLine of cleanDisplayText(text).split("\n")) {
+    let current = "";
+    for (const char of Array.from(sourceLine || " ")) {
+      const next = current + char;
+      if (current && context.measureText(next).width > maxWidth) {
+        rows.push(current);
+        current = char.trimStart();
+      } else {
+        current = next;
+      }
+    }
+    rows.push(current);
+  }
+  return rows;
+}
+
+async function renderTranslationLogImage(payload: OverlayPayload) {
+  if (!payload.source_image_data_url) return null;
+  const width = Math.max(1, Math.round(payload.image_width));
+  const height = Math.max(1, Math.round(payload.image_height));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+
+  const source = await loadCanvasImage(payload.source_image_data_url);
+  context.drawImage(source, 0, 0, width, height);
+
+  for (const block of payload.image_blocks) {
+    const blockX = Math.round(block.x);
+    const blockY = Math.round(block.y);
+    const blockWidth = Math.max(1, Math.round(block.width));
+    const blockHeight = Math.max(1, Math.round(block.height));
+    const fontSize = Math.max(9, Math.round(block.font_size || payload.font_size || 18));
+    const paddingX = 2;
+    const lineHeight = fontSize * 1.26;
+    context.fillStyle = rgbaFromHex(block.background, 0.985);
+    context.fillRect(blockX, blockY, blockWidth, blockHeight);
+    context.font = `500 ${fontSize}px "Microsoft YaHei UI", "Segoe UI", Arial, sans-serif`;
+    context.fillStyle = /^#[0-9a-f]{6}$/i.test(block.color) ? block.color : "#ffffff";
+    context.textBaseline = "top";
+    context.textAlign = block.align === "right" ? "right" : block.align === "center" ? "center" : "left";
+
+    const rows =
+      block.wrap_mode === "single"
+        ? [cleanDisplayText(block.translated_text).replace(/\s*\n+\s*/g, " ")]
+        : wrapCanvasText(context, block.translated_text, Math.max(1, blockWidth - paddingX * 2));
+    const maxRows = Math.max(1, Math.floor(blockHeight / lineHeight));
+    const visibleRows = rows.slice(0, maxRows);
+    if (rows.length > maxRows && visibleRows.length > 0) {
+      visibleRows[visibleRows.length - 1] = `${visibleRows[visibleRows.length - 1].replace(/…$/, "")}…`;
+    }
+    const textHeight = visibleRows.length * lineHeight;
+    const startY =
+      block.align === "center"
+        ? blockY + Math.max(0, (blockHeight - textHeight) / 2)
+        : blockY;
+    const textX =
+      block.align === "right"
+        ? blockX + blockWidth - paddingX
+        : block.align === "center"
+          ? blockX + blockWidth / 2
+          : blockX + paddingX;
+    visibleRows.forEach((row, index) => {
+      context.fillText(row, textX, startY + index * lineHeight, blockWidth - paddingX * 2);
+    });
+  }
+
+  return canvas.toDataURL("image/png");
+}
+
 function OverlayApp() {
   const [payload, setPayload] = React.useState<OverlayPayload>(emptyPayload);
   const [userSized, setUserSized] = React.useState(false);
@@ -131,6 +221,7 @@ function OverlayApp() {
   const translationPanelRef = React.useRef<ResizablePanelHandle | null>(null);
   const lastResize = React.useRef({ width: 0, height: 0 });
   const ignoreResizeUntil = React.useRef(0);
+  const loggedEntry = React.useRef<string | null>(null);
 
   const rawText = cleanDisplayText(payload.raw_text);
   const translatedText = cleanDisplayText(payload.text) || "无翻译结果";
@@ -236,6 +327,23 @@ function OverlayApp() {
   }, [payload, imageReplaceMode, showSource, rawText, translatedText, maxHeight, userSized]);
 
   React.useEffect(() => {
+    const entryId = payload.log_entry_id;
+    if (!imageReplaceMode || !entryId || loggedEntry.current === entryId) return;
+    loggedEntry.current = entryId;
+    renderTranslationLogImage(payload)
+      .then((translatedImageDataUrl) => {
+        if (!translatedImageDataUrl) return;
+        return invoke("save_translation_log_render", {
+          request: {
+            entry_id: entryId,
+            translated_image_data_url: translatedImageDataUrl,
+          },
+        });
+      })
+      .catch(() => {});
+  }, [payload, imageReplaceMode]);
+
+  React.useEffect(() => {
     function onResize() {
       setViewportSize({
         width: window.innerWidth || 1,
@@ -309,6 +417,7 @@ function OverlayApp() {
                 <div
                   key={`${index}-${block.x}-${block.y}`}
                   className={`image-replace-block align-${block.align || "left"}`}
+                  data-wrap={block.wrap_mode || "wrap"}
                   title={block.source_text}
                   style={{
                     left: block.x,

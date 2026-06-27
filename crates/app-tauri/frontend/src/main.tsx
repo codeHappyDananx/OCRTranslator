@@ -42,6 +42,11 @@ type AppBehaviorConfig = {
   launch_at_startup: boolean;
 };
 
+type DeveloperConfig = {
+  translation_log_enabled: boolean;
+  translation_log_retention_days: number;
+};
+
 type AppConfig = {
   source_lang: string;
   target_lang: string;
@@ -50,6 +55,7 @@ type AppConfig = {
   hotkey: string;
   provider_settings: Record<string, Record<string, string>>;
   app: AppBehaviorConfig;
+  developer: DeveloperConfig;
   overlay: OverlayConfig;
 };
 
@@ -58,6 +64,11 @@ const defaultAppBehavior: AppBehaviorConfig = {
   ask_before_close: true,
   auto_elevate: false,
   launch_at_startup: false,
+};
+
+const defaultDeveloper: DeveloperConfig = {
+  translation_log_enabled: false,
+  translation_log_retention_days: 7,
 };
 
 const defaultOverlay: OverlayConfig = {
@@ -177,6 +188,7 @@ function SettingsApp() {
             ?.id ?? fallbackProvider?.id ?? "bing",
         ocr_engine: "snippingtool",
         app: { ...defaultAppBehavior, ...loaded.app },
+        developer: { ...defaultDeveloper, ...loaded.developer },
         overlay: { ...defaultOverlay, ...loaded.overlay },
       });
     }
@@ -239,6 +251,11 @@ function SettingsApp() {
     updateConfig((current) => ({
       ...current,
       app: { ...current.app, ...patch },
+    }));
+  const setDeveloper = (patch: Partial<DeveloperConfig>) =>
+    updateConfig((current) => ({
+      ...current,
+      developer: { ...current.developer, ...patch },
     }));
   const isImageReplaceMode = config.overlay.result_mode === "image_replace";
 
@@ -501,6 +518,39 @@ function SettingsApp() {
                 />
               </label>
             ))}
+          </div>
+        </article>
+
+        <article className="panel wide">
+          <h2>开发者设置</h2>
+          <label className="field check">
+            <input
+              type="checkbox"
+              checked={config.developer.translation_log_enabled}
+              onChange={(event) =>
+                setDeveloper({ translation_log_enabled: event.target.checked })
+              }
+            />
+            记录原图替换翻译日志
+          </label>
+          <label className="field compact-number">
+            日志保留天数
+            <input
+              type="number"
+              min={1}
+              max={365}
+              step={1}
+              value={config.developer.translation_log_retention_days}
+              disabled={!config.developer.translation_log_enabled}
+              onChange={(event) =>
+                setDeveloper({
+                  translation_log_retention_days: Number(event.target.value || 7),
+                })
+              }
+            />
+          </label>
+          <div className="hint">
+            日志按日期保存到用户配置目录，包含 source.png、metadata.json，以及成功渲染后的 translated.png。
           </div>
         </article>
       </section>

@@ -12,6 +12,8 @@ pub struct AppConfig {
     pub provider_settings: HashMap<String, HashMap<String, String>>,
     #[serde(default)]
     pub app: AppBehaviorConfig,
+    #[serde(default)]
+    pub developer: DeveloperConfig,
     pub overlay: OverlayConfig,
 }
 
@@ -25,6 +27,14 @@ pub struct AppBehaviorConfig {
     pub auto_elevate: bool,
     #[serde(default)]
     pub launch_at_startup: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeveloperConfig {
+    #[serde(default)]
+    pub translation_log_enabled: bool,
+    #[serde(default = "default_translation_log_retention_days")]
+    pub translation_log_retention_days: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -61,6 +71,7 @@ impl Default for AppConfig {
             hotkey: "MouseX1".to_string(),
             provider_settings: HashMap::new(),
             app: AppBehaviorConfig::default(),
+            developer: DeveloperConfig::default(),
             overlay: OverlayConfig::default(),
         }
     }
@@ -73,6 +84,15 @@ impl Default for AppBehaviorConfig {
             ask_before_close: default_ask_before_close(),
             auto_elevate: false,
             launch_at_startup: false,
+        }
+    }
+}
+
+impl Default for DeveloperConfig {
+    fn default() -> Self {
+        Self {
+            translation_log_enabled: false,
+            translation_log_retention_days: default_translation_log_retention_days(),
         }
     }
 }
@@ -112,6 +132,10 @@ fn default_overlay_max_height() -> u32 {
 
 fn default_ask_before_close() -> bool {
     true
+}
+
+fn default_translation_log_retention_days() -> u32 {
+    7
 }
 
 fn default_source_background() -> String {
@@ -163,11 +187,18 @@ impl AppConfig {
             || !text.contains("\"ask_before_close\"")
             || !text.contains("\"auto_elevate\"")
             || !text.contains("\"launch_at_startup\"");
+        let missing_developer_fields = !text.contains("\"developer\"")
+            || !text.contains("\"translation_log_enabled\"")
+            || !text.contains("\"translation_log_retention_days\"");
         let mut cfg: Self = serde_json::from_str(&text)
             .with_context(|| format!("解析配置失败：{}", path.display()))?;
         let before = cfg.clone();
         cfg.normalize();
-        if missing_overlay_fields || missing_app_fields || cfg.normalized_differs_from(&before) {
+        if missing_overlay_fields
+            || missing_app_fields
+            || missing_developer_fields
+            || cfg.normalized_differs_from(&before)
+        {
             cfg.save()?;
         }
         Ok(cfg)
@@ -199,6 +230,8 @@ impl AppConfig {
         self.overlay.opacity = self.overlay.opacity.clamp(0.05, 0.9);
         self.overlay.screen_margin = self.overlay.screen_margin.clamp(0, 120);
         self.overlay.no_drag_ms = self.overlay.no_drag_ms.max(500);
+        self.developer.translation_log_retention_days =
+            self.developer.translation_log_retention_days.clamp(1, 365);
         if !is_hex_color(&self.overlay.source_background) {
             self.overlay.source_background = default_source_background();
         }
@@ -215,6 +248,7 @@ impl AppConfig {
             || self.hotkey != other.hotkey
             || self.provider_settings != other.provider_settings
             || self.app != other.app
+            || self.developer != other.developer
             || self.overlay != other.overlay
     }
 }
