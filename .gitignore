@@ -5,6 +5,7 @@
 /crates/app-tauri/frontend/dist/
 /.vs/
 /.vscode/
+/diagnostics/
 *.pdb
 *.log
 *.tmp
